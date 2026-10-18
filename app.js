@@ -1,5 +1,33 @@
-const views = [...document.querySelectorAll('.view')];
-const navItems = [...document.querySelectorAll('.nav-item')];
+let views = [...document.querySelectorAll('.view')];
+let navItems = [...document.querySelectorAll('.nav-item')];
+const EVENTS_STORAGE_KEY = 'mapdule-events';
+const PROFILE_STORAGE_KEY = 'mapdule-profile';
+
+function readStoredValue(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[character]);
+}
+
+function localDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 function clearDemoContent() {
   const today = new Date();
@@ -12,14 +40,21 @@ function clearDemoContent() {
     date.setDate(weekStart.getDate() + index);
     button.innerHTML = `${weekdayNames[index]}<strong>${date.getDate()}</strong>`;
     button.classList.toggle('selected', date.toDateString() === today.toDateString());
-    return { day: weekdayNames[index], date: date.getDate(), selected: date.toDateString() === today.toDateString() };
+    return {
+      day: weekdayNames[index],
+      date: date.getDate(),
+      iso: localDateString(date),
+      selected: date.toDateString() === today.toDateString()
+    };
   });
 
   const month = today.getMonth() + 1;
   const todayName = weekdayNames[today.getDay()];
   document.querySelector('#today-title').innerHTML = `오늘, ${month}월 ${today.getDate()}일 <em>(${todayName})</em>`;
   document.querySelector('.status-pill').innerHTML = '<i></i>위치 미연결';
-  document.querySelector('.avatar').innerHTML = '<span class="material-symbols-rounded">person</span>';
+  const profile = readStoredValue(PROFILE_STORAGE_KEY, {});
+  const avatar = document.querySelector('.avatar');
+  avatar.textContent = profile.name?.trim() ? profile.name.trim().slice(0, 1) : 'P';
 
   document.querySelector('.map-card').innerHTML = `
     <div class="map-grid"></div>
@@ -57,14 +92,35 @@ function clearDemoContent() {
     <div class="empty-state panel"><span class="material-symbols-rounded">group_add</span><h2>아직 참가 위치가 없어요</h2><p>참가자의 출발 위치를 추가해 주세요.</p></div>
   `;
 
-  document.querySelector('.energy-top h2').textContent = '일정 등록 후 확인할 수 있어요';
-  document.querySelector('.energy-top > strong').textContent = '—';
-  document.querySelector('.gauge i').style.width = '0%';
-  document.querySelector('.gauge-labels').hidden = true;
-  document.querySelector('.energy-hero > p').textContent = '일정과 이동 정보가 등록되면 피로도를 계산합니다.';
-  document.querySelector('.energy-hero .primary-cta').disabled = true;
-  document.querySelector('.energy-hero .primary-cta').textContent = '일정 등록 후 휴식을 제안합니다';
-  document.querySelector('.recovery-list').innerHTML = '<div class="empty-state panel"><p>예정된 회복 활동이 없습니다.</p></div>';
+  const manualView = document.createElement('section');
+  manualView.id = 'manual';
+  manualView.className = 'view compact-view';
+  manualView.setAttribute('aria-labelledby', 'manual-title');
+  manualView.innerHTML = `
+    <div class="section-heading">
+      <div class="section-icon indigo-bg"><span class="material-symbols-rounded">event</span></div>
+      <div><h1 id="manual-title">일정 직접 등록</h1><p>입력한 일정은 이 브라우저에 저장됩니다.</p></div>
+    </div>
+    <form id="manual-event-form" class="manual-form panel">
+      <label class="form-field form-wide">일정 이름<input name="title" type="text" maxlength="80" placeholder="일정 이름" required></label>
+      <label class="form-field">날짜<input name="date" type="date" required></label>
+      <label class="form-field">분류<select name="category"><option>약속</option><option>업무</option><option>운동</option><option>개인</option><option>기타</option></select></label>
+      <label class="form-field">시작 시간<input name="startTime" type="time" required></label>
+      <label class="form-field">종료 시간<input name="endTime" type="time" required></label>
+      <label class="form-field form-wide">장소<input name="location" type="text" maxlength="120" placeholder="장소 (선택)"></label>
+      <label class="form-field form-wide">메모<textarea name="notes" rows="3" maxlength="300" placeholder="메모 (선택)"></textarea></label>
+      <button class="primary-cta form-wide" type="submit"><span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가</button>
+    </form>
+  `;
+  document.querySelector('.ai-brief').before(manualView);
+
+  const manualNavItem = document.createElement('button');
+  manualNavItem.className = 'nav-item';
+  manualNavItem.dataset.view = 'manual';
+  manualNavItem.innerHTML = '<span class="material-symbols-rounded">event</span><small>일정 등록</small>';
+  document.querySelector('.bottom-nav').append(manualNavItem);
+  views = [...document.querySelectorAll('.view')];
+  navItems = [...document.querySelectorAll('.nav-item')];
 
   document.querySelector('.ai-brief small').textContent = '일정을 추가하면 이동 안내를 표시합니다.';
   const quickRoute = document.querySelector('.ai-brief button');
@@ -90,7 +146,7 @@ function showToast(message, tone = 'default') {
   showToast.timeout = setTimeout(() => toast.classList.remove('visible'), 2600);
 }
 
-function showModal(title, content, actionText = '확인') {
+function showModal(title, content, actionText = '확인', onAction) {
   const modal = document.createElement('div');
   modal.className = 'modal-backdrop';
   modal.innerHTML = `
@@ -104,7 +160,11 @@ function showModal(title, content, actionText = '확인') {
   document.body.append(modal);
   const close = () => modal.remove();
   modal.addEventListener('click', (event) => {
-    if (event.target === modal || event.target.closest('.modal-close') || event.target.closest('.modal-action')) close();
+    if (event.target === modal || event.target.closest('.modal-close')) close();
+    if (event.target.closest('.modal-action')) {
+      if (onAction?.(modal) === false) return;
+      close();
+    }
   });
   modal.querySelector('.modal-close').focus();
 }
@@ -115,8 +175,9 @@ function showView(id) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-document.querySelectorAll('[data-view]').forEach((control) => {
-  control.addEventListener('click', () => showView(control.dataset.view));
+document.addEventListener('click', (event) => {
+  const control = event.target.closest('[data-view]');
+  if (control && document.body.contains(control)) showView(control.dataset.view);
 });
 
 document.querySelector('.brand')?.addEventListener('click', (event) => {
@@ -129,38 +190,166 @@ document.querySelector('[aria-label="알림"]')?.addEventListener('click', () =>
 });
 
 document.querySelector('[aria-label="프로필"]')?.addEventListener('click', () => {
-  showModal('프로필', '<p>로그인하면 일정과 설정을 동기화할 수 있어요.</p>', '확인');
+  const profile = readStoredValue(PROFILE_STORAGE_KEY, {});
+  const transportMode = ['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit';
+  showModal('프로필 설정', `
+    <form id="profile-form" class="profile-form">
+      <label class="modal-field">표시 이름<input name="name" type="text" maxlength="40" value="${escapeHtml(profile.name || '')}" placeholder="이름" required></label>
+      <label class="modal-field">집 위치<input name="home" type="text" maxlength="120" value="${escapeHtml(profile.home || '')}" placeholder="집 위치 (선택)"></label>
+      <label class="modal-field">기본 이동 수단<select name="transportMode"><option value="transit" ${transportMode === 'transit' ? 'selected' : ''}>대중교통</option><option value="walk" ${transportMode === 'walk' ? 'selected' : ''}>도보</option><option value="car" ${transportMode === 'car' ? 'selected' : ''}>자동차</option></select></label>
+      <p class="modal-note">설정은 이 브라우저에만 저장됩니다.</p>
+    </form>`, '저장', (modal) => {
+    const form = modal.querySelector('#profile-form');
+    if (!form.reportValidity()) return false;
+    const formData = new FormData(form);
+    const updatedProfile = {
+      name: String(formData.get('name')).trim(),
+      home: String(formData.get('home')).trim(),
+      transportMode: String(formData.get('transportMode'))
+    };
+    try {
+      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updatedProfile));
+    } catch {
+      showToast('브라우저 저장 공간에 접근할 수 없습니다.', 'info');
+      return false;
+    }
+    document.querySelector('.avatar').textContent = updatedProfile.name.slice(0, 1);
+    showToast('프로필을 저장했습니다.', 'success');
+    return true;
+  });
 });
 
 const dateTitle = document.querySelector('#today-title');
 const dateButtons = [...document.querySelectorAll('.week-strip button')];
 let selectedDate = new Date();
+
+function setSelectedDate(date, announce = false) {
+  selectedDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
+  const day = ['일', '월', '화', '수', '목', '금', '토'][selectedDate.getDay()];
+  const isToday = selectedDate.toDateString() === new Date().toDateString();
+  dateTitle.innerHTML = `${isToday ? '오늘, ' : ''}${selectedDate.getMonth() + 1}월 ${selectedDate.getDate()}일 <em>(${day})</em>`;
+  dateButtons.forEach((button, index) => button.classList.toggle('selected', weekDates[index].iso === localDateString(selectedDate)));
+  renderCalendar();
+  const dateField = document.querySelector('#manual-event-form [name="date"]');
+  if (dateField) dateField.value = localDateString(selectedDate);
+  if (announce) showToast(`${selectedDate.getMonth() + 1}월 ${selectedDate.getDate()}일 일정을 표시합니다.`);
+}
+
 dateButtons.forEach((button, index) => {
   button.addEventListener('click', () => {
-    dateButtons.forEach((item) => item.classList.remove('selected'));
-    button.classList.add('selected');
     const selected = weekDates[index];
-    selectedDate = new Date(selectedDate);
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay() + index);
-    selectedDate = weekStart;
-    dateTitle.innerHTML = `${selected.selected ? '오늘, ' : ''}${selectedDate.getMonth() + 1}월 ${selectedDate.getDate()}일 <em>(${selected.day})</em>`;
-    showToast(`${selected.day}요일 일정으로 이동했습니다.`);
+    setSelectedDate(new Date(`${selected.iso}T12:00:00`), true);
   });
 });
 
 function moveSelectedDate(days) {
-  selectedDate.setDate(selectedDate.getDate() + days);
-  const day = ['일', '월', '화', '수', '목', '금', '토'][selectedDate.getDay()];
-  dateTitle.innerHTML = `${selectedDate.toDateString() === new Date().toDateString() ? '오늘, ' : ''}${selectedDate.getMonth() + 1}월 ${selectedDate.getDate()}일 <em>(${day})</em>`;
-  dateButtons.forEach((button) => button.classList.remove('selected'));
-  showToast(`${selectedDate.getMonth() + 1}월 ${selectedDate.getDate()}일 일정으로 이동했습니다.`);
+  const date = new Date(selectedDate);
+  date.setDate(date.getDate() + days);
+  setSelectedDate(date, true);
 }
 
 document.querySelector('[aria-label="이전 날짜"]')?.addEventListener('click', () => moveSelectedDate(-1));
 document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click', () => moveSelectedDate(1));
 
-document.querySelector('.sync-button')?.addEventListener('click', (event) => {
+  function loadSavedEvents() {
+    const events = readStoredValue(EVENTS_STORAGE_KEY, []);
+    return Array.isArray(events) ? events : [];
+  }
+
+  function renderCalendar() {
+    const timeline = document.querySelector('.timeline');
+    if (!timeline) return;
+    const date = localDateString(selectedDate);
+    const events = loadSavedEvents()
+      .filter((item) => item.date === date)
+      .sort((first, second) => first.startTime.localeCompare(second.startTime));
+
+    if (!events.length) {
+      timeline.innerHTML = `
+        <div class="empty-state panel">
+          <span class="material-symbols-rounded">calendar_add_on</span>
+          <h2>등록된 일정이 없어요</h2>
+          <p>직접 일정을 등록하면 이 날짜의 타임라인에 표시됩니다.</p>
+          <button class="primary-cta" data-view="manual" type="button"><span class="material-symbols-rounded">add</span>일정 등록</button>
+        </div>
+      `;
+      return;
+    }
+
+    timeline.innerHTML = events.map((item) => `
+      <article class="timeline-row saved-event">
+        <div class="time-node"><b><span class="material-symbols-rounded">event</span></b><time>${escapeHtml(item.startTime)}</time></div>
+        <div class="event-card panel">
+          <div class="card-meta"><span class="tag indigo">${escapeHtml(item.category)}</span><button class="event-delete" type="button" data-delete-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 삭제"><span class="material-symbols-rounded">delete</span></button></div>
+          <h2>${escapeHtml(item.title)}</h2>
+          <p class="event-time"><span class="material-symbols-rounded">schedule</span>${escapeHtml(item.startTime)} - ${escapeHtml(item.endTime)}</p>
+          ${item.location ? `<p><span class="material-symbols-rounded">location_on</span>${escapeHtml(item.location)}</p>` : ''}
+          ${item.notes ? `<p class="event-notes">${escapeHtml(item.notes)}</p>` : ''}
+        </div>
+      </article>
+    `).join('');
+  }
+
+  document.querySelector('.timeline')?.addEventListener('click', (event) => {
+    const deleteButton = event.target.closest('[data-delete-event]');
+    if (!deleteButton) return;
+    const eventId = deleteButton.dataset.deleteEvent;
+    const remainingEvents = loadSavedEvents().filter((item) => item.id !== eventId);
+    try {
+      localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(remainingEvents));
+    } catch {
+      showToast('일정을 삭제하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'info');
+      return;
+    }
+    renderCalendar();
+    showToast('일정을 삭제했습니다.');
+  });
+
+  const manualEventForm = document.querySelector('#manual-event-form');
+  const endTimeInput = manualEventForm.elements.endTime;
+  endTimeInput.addEventListener('input', () => endTimeInput.setCustomValidity(''));
+  manualEventForm.elements.date.value = localDateString(selectedDate);
+  manualEventForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!manualEventForm.reportValidity()) return;
+
+    const formData = new FormData(manualEventForm);
+    const startTime = String(formData.get('startTime'));
+    const endTime = String(formData.get('endTime'));
+    if (endTime <= startTime) {
+      endTimeInput.setCustomValidity('종료 시간은 시작 시간보다 늦어야 합니다.');
+      endTimeInput.reportValidity();
+      return;
+    }
+
+    const newEvent = {
+      id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      title: String(formData.get('title')).trim(),
+      date: String(formData.get('date')),
+      startTime,
+      endTime,
+      category: String(formData.get('category')),
+      location: String(formData.get('location')).trim(),
+      notes: String(formData.get('notes')).trim()
+    };
+
+    try {
+      localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify([...loadSavedEvents(), newEvent]));
+    } catch {
+      showToast('일정을 저장하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'info');
+      return;
+    }
+
+    setSelectedDate(new Date(`${newEvent.date}T12:00:00`));
+    manualEventForm.reset();
+    manualEventForm.elements.date.value = newEvent.date;
+    showView('today');
+    showToast('일정을 캘린더에 추가했습니다.', 'success');
+  });
+
+  renderCalendar();
+
+  document.querySelector('.sync-button')?.addEventListener('click', (event) => {
   const button = event.currentTarget;
   button.innerHTML = '<span class="material-symbols-rounded">check</span>동기화 완료';
   setTimeout(() => {
@@ -225,10 +414,3 @@ document.querySelector('#midpoint .primary-cta')?.addEventListener('click', () =
 });
 
 document.querySelector('.secondary-cta')?.addEventListener('click', () => showToast('중간지점을 먼저 계산해 주세요.'));
-
-const energyButton = document.querySelector('#energy .primary-cta');
-energyButton?.addEventListener('click', () => {
-  energyButton.innerHTML = '<span class="material-symbols-rounded">check</span>휴식 블록이 추가됨';
-  energyButton.classList.add('added');
-  showToast('15:40에 30분 휴식 블록을 추가했습니다.', 'success');
-});
