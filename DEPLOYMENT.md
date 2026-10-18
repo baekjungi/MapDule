@@ -29,6 +29,18 @@ Static Web Apps Free는 현재 가격표상 월 $0입니다. 포함 한도는 �
 
 ## Azure Portal 확인 절차
 
+현재 리소스는 이미 생성되어 있습니다. Portal에서 같은 구성을 새로 만들거나 다시 연결할 때는 다음 값을 사용합니다.
+
+### 새 Static Web App 생성
+
+1. **Create a resource**에서 **Static Web Apps**를 선택합니다.
+2. 구독은 `왕선중 백준기`, 리소스 그룹은 `rg-mapdule-prod`, 이름은 사용 가능한 이름, 플랜은 **Free**, 지역은 **East Asia**로 설정합니다.
+3. 배포 원본은 **GitHub**로 선택하고 계정 `baekjungi`, 저장소 `MapDule`, 브랜치 `main`을 연결합니다.
+4. 빌드 세부 설정은 **Custom**으로 지정하고 앱 위치는 `/`, API 위치와 출력 위치는 비워 둡니다.
+5. 검토 후 생성합니다. Azure가 GitHub Actions 워크플로와 배포 Secret을 생성합니다.
+
+### 현재 배포 확인
+
 1. [Azure Portal](https://portal.azure.com/)에서 `rg-mapdule-prod` 리소스 그룹을 엽니다.
 2. `mapdule-baekjungi` Static Web App 리소스를 선택합니다.
 3. **Overview**에서 상태, 지역, 플랜, 기본 도메인을 확인합니다.
