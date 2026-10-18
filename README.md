@@ -35,9 +35,9 @@ npm start
 
 이 프로젝트는 빌드 단계가 없는 정적 웹앱입니다.
 
-- 정적 호스팅: `index.html`, `styles.css`, `app.js`와 설정 파일을 업로드
-- Node 호스팅: `npm start` 실행, `PORT` 환경 변수 사용
-- Vercel, Netlify, GitHub Pages: 루트 디렉터리를 배포 대상으로 설정
+- Azure Static Web Apps Free에 배포되어 있습니다.
+- `main` 브랜치에 푸시하면 GitHub Actions 검사 후 자동 배포됩니다.
+- Azure 연결 정보, 무료 한도, 장애 확인 방법은 [DEPLOYMENT.md](DEPLOYMENT.md)를 참고합니다.
 
 실제 서비스로 전환하기 전에 다음 작업이 필요합니다.
 
