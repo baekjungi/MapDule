@@ -2,6 +2,7 @@ let views = [...document.querySelectorAll('.view')];
 let navItems = [...document.querySelectorAll('.nav-item')];
 const EVENTS_STORAGE_KEY = 'mapdule-events';
 const PROFILE_STORAGE_KEY = 'mapdule-profile';
+let editingEventId = null;
 
 function readStoredValue(key, fallback) {
   try {
@@ -58,7 +59,8 @@ function clearDemoContent() {
 
   document.querySelector('.map-card').innerHTML = `
     <div class="map-grid"></div>
-    <div class="map-empty"><span class="material-symbols-rounded">map</span><b>표시할 경로가 없어요</b><small>일정을 등록하면 이동 경로가 표시됩니다.</small></div>
+    <div id="kakao-map" class="kakao-map-canvas" aria-label="카카오 지도"></div>
+    <div class="map-empty"><span class="material-symbols-rounded">map</span><b>카카오 지도 키를 설정해 주세요</b><small>index.html의 kakao-javascript-key 항목에 JavaScript 키를 입력합니다.</small></div>
     <div class="map-top"><span><i></i>경로 대기 중</span><button type="button"><span class="material-symbols-rounded">layers</span>지도 보기</button></div>
   `;
   document.querySelector('.timeline').innerHTML = `
@@ -110,7 +112,18 @@ function clearDemoContent() {
       <label class="form-field form-wide">장소<input name="location" type="text" maxlength="120" placeholder="장소 (선택)"></label>
       <label class="form-field form-wide">메모<textarea name="notes" rows="3" maxlength="300" placeholder="메모 (선택)"></textarea></label>
       <button class="primary-cta form-wide" type="submit"><span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가</button>
+      <button class="secondary-cta form-wide cancel-edit hidden" type="button">수정 취소</button>
     </form>
+    <section class="calendar-tools panel" aria-label="캘린더 데이터 관리">
+      <h2>캘린더 관리</h2>
+      <div class="calendar-tool-actions">
+        <button type="button" id="export-ics"><span class="material-symbols-rounded">calendar_month</span>캘린더 파일 내보내기</button>
+        <button type="button" id="export-backup"><span class="material-symbols-rounded">download</span>JSON 백업</button>
+        <button type="button" id="import-backup"><span class="material-symbols-rounded">upload</span>백업 복원</button>
+        <button type="button" id="clear-local-data"><span class="material-symbols-rounded">delete_sweep</span>모든 데이터 삭제</button>
+        <input id="backup-file" type="file" accept="application/json,.json" hidden>
+      </div>
+    </section>
   `;
   document.querySelector('.ai-brief').before(manualView);
 
@@ -131,6 +144,36 @@ function clearDemoContent() {
 }
 
 const weekDates = clearDemoContent();
+
+function initializeKakaoMap() {
+  const key = document.querySelector('meta[name="kakao-javascript-key"]')?.content.trim();
+  const mapCanvas = document.querySelector('#kakao-map');
+  const fallback = document.querySelector('.map-empty');
+  if (!key || !mapCanvas || !fallback) return;
+
+  const script = document.createElement('script');
+  script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`;
+  script.async = true;
+  script.onload = () => {
+    if (!window.kakao?.maps?.load) {
+      fallback.innerHTML = '<span class="material-symbols-rounded">error</span><b>카카오 지도를 불러오지 못했어요</b><small>JavaScript 키와 허용 도메인을 확인해 주세요.</small>';
+      return;
+    }
+    window.kakao.maps.load(() => {
+      new window.kakao.maps.Map(mapCanvas, {
+        center: new window.kakao.maps.LatLng(37.5665, 126.978),
+        level: 8
+      });
+      fallback.hidden = true;
+    });
+  };
+  script.onerror = () => {
+    fallback.innerHTML = '<span class="material-symbols-rounded">error</span><b>카카오 지도를 불러오지 못했어요</b><small>JavaScript 키와 허용 도메인을 확인해 주세요.</small>';
+  };
+  document.head.append(script);
+}
+
+initializeKakaoMap();
 
 function showToast(message, tone = 'default') {
   let toast = document.querySelector('.toast');
@@ -256,6 +299,47 @@ document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click'
     return Array.isArray(events) ? events : [];
   }
 
+  function saveEvents(events) {
+    try {
+      localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(events));
+      return true;
+    } catch {
+      showToast('일정을 저장하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'info');
+      return false;
+    }
+  }
+
+  function findTimeConflict(candidate, ignoredId = null) {
+    return loadSavedEvents().find((item) => item.id !== ignoredId
+      && item.date === candidate.date
+      && candidate.startTime < item.endTime
+      && candidate.endTime > item.startTime);
+  }
+
+  function downloadFile(filename, content, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function escapeICSText(value) {
+    return String(value || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/\r?\n/g, '\\n')
+      .replace(/,/g, '\\,')
+      .replace(/;/g, '\\;');
+  }
+
+  function toICSDate(date, time) {
+    return `${date.replace(/-/g, '')}T${time.replace(':', '')}00`;
+  }
+
   function renderCalendar() {
     const timeline = document.querySelector('.timeline');
     if (!timeline) return;
@@ -280,7 +364,7 @@ document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click'
       <article class="timeline-row saved-event">
         <div class="time-node"><b><span class="material-symbols-rounded">event</span></b><time>${escapeHtml(item.startTime)}</time></div>
         <div class="event-card panel">
-          <div class="card-meta"><span class="tag indigo">${escapeHtml(item.category)}</span><button class="event-delete" type="button" data-delete-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 삭제"><span class="material-symbols-rounded">delete</span></button></div>
+          <div class="card-meta"><span class="tag indigo">${escapeHtml(item.category)}</span><div class="event-actions"><button class="event-edit" type="button" data-edit-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 수정"><span class="material-symbols-rounded">edit</span></button><button class="event-delete" type="button" data-delete-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 삭제"><span class="material-symbols-rounded">delete</span></button></div></div>
           <h2>${escapeHtml(item.title)}</h2>
           <p class="event-time"><span class="material-symbols-rounded">schedule</span>${escapeHtml(item.startTime)} - ${escapeHtml(item.endTime)}</p>
           ${item.location ? `<p><span class="material-symbols-rounded">location_on</span>${escapeHtml(item.location)}</p>` : ''}
@@ -291,12 +375,30 @@ document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click'
   }
 
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
+    const editButton = event.target.closest('[data-edit-event]');
+    if (editButton) {
+      const existing = loadSavedEvents().find((item) => item.id === editButton.dataset.editEvent);
+      if (!existing) return;
+      editingEventId = existing.id;
+      manualEventForm.elements.title.value = existing.title;
+      manualEventForm.elements.date.value = existing.date;
+      manualEventForm.elements.category.value = existing.category;
+      manualEventForm.elements.startTime.value = existing.startTime;
+      manualEventForm.elements.endTime.value = existing.endTime;
+      manualEventForm.elements.location.value = existing.location || '';
+      manualEventForm.elements.notes.value = existing.notes || '';
+      manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">save</span>일정 수정 저장';
+      manualEventForm.querySelector('.cancel-edit').classList.remove('hidden');
+      showView('manual');
+      return;
+    }
+
     const deleteButton = event.target.closest('[data-delete-event]');
     if (!deleteButton) return;
     const eventId = deleteButton.dataset.deleteEvent;
     const remainingEvents = loadSavedEvents().filter((item) => item.id !== eventId);
     try {
-      localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(remainingEvents));
+      if (!saveEvents(remainingEvents)) return;
     } catch {
       showToast('일정을 삭제하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'info');
       return;
@@ -309,6 +411,14 @@ document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click'
   const endTimeInput = manualEventForm.elements.endTime;
   endTimeInput.addEventListener('input', () => endTimeInput.setCustomValidity(''));
   manualEventForm.elements.date.value = localDateString(selectedDate);
+  manualEventForm.querySelector('.cancel-edit').addEventListener('click', () => {
+    editingEventId = null;
+    manualEventForm.reset();
+    manualEventForm.elements.date.value = localDateString(selectedDate);
+    manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
+    manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
+  });
+
   manualEventForm.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!manualEventForm.reportValidity()) return;
@@ -323,7 +433,7 @@ document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click'
     }
 
     const newEvent = {
-      id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: editingEventId || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       title: String(formData.get('title')).trim(),
       date: String(formData.get('date')),
       startTime,
@@ -333,21 +443,130 @@ document.querySelector('[aria-label="다음 날짜"]')?.addEventListener('click'
       notes: String(formData.get('notes')).trim()
     };
 
-    try {
-      localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify([...loadSavedEvents(), newEvent]));
-    } catch {
-      showToast('일정을 저장하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'info');
+    const conflict = findTimeConflict(newEvent, editingEventId);
+    if (conflict) {
+      showToast(`다른 일정 '${conflict.title}'과 시간이 겹칩니다. 시간을 바꿔 주세요.`, 'info');
       return;
     }
 
+    const events = loadSavedEvents();
+    const updatedEvents = editingEventId
+      ? events.map((item) => item.id === editingEventId ? newEvent : item)
+      : [...events, newEvent];
+    if (!saveEvents(updatedEvents)) return;
+
     setSelectedDate(new Date(`${newEvent.date}T12:00:00`));
+    const wasEditing = Boolean(editingEventId);
+    editingEventId = null;
     manualEventForm.reset();
     manualEventForm.elements.date.value = newEvent.date;
+    manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
+    manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
     showView('today');
-    showToast('일정을 캘린더에 추가했습니다.', 'success');
+    showToast(wasEditing ? '일정을 수정했습니다.' : '일정을 캘린더에 추가했습니다.', 'success');
   });
 
   renderCalendar();
+
+  document.querySelector('#export-ics').addEventListener('click', () => {
+    const events = loadSavedEvents().sort((first, second) => `${first.date}${first.startTime}`.localeCompare(`${second.date}${second.startTime}`));
+    if (!events.length) {
+      showToast('내보낼 일정이 없습니다.');
+      return;
+    }
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//MapDule//Calendar Export//KO',
+      'CALSCALE:GREGORIAN',
+      'X-WR-TIMEZONE:Asia/Seoul'
+    ];
+    for (const item of events) {
+      lines.push(
+        'BEGIN:VEVENT',
+        `UID:${escapeICSText(item.id)}@mapdule.local`,
+        `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`,
+        `DTSTART;TZID=Asia/Seoul:${toICSDate(item.date, item.startTime)}`,
+        `DTEND;TZID=Asia/Seoul:${toICSDate(item.date, item.endTime)}`,
+        `SUMMARY:${escapeICSText(item.title)}`
+      );
+      if (item.location) lines.push(`LOCATION:${escapeICSText(item.location)}`);
+      if (item.notes) lines.push(`DESCRIPTION:${escapeICSText(item.notes)}`);
+      lines.push('END:VEVENT');
+    }
+    lines.push('END:VCALENDAR');
+    downloadFile('mapdule-calendar.ics', `${lines.join('\r\n')}\r\n`, 'text/calendar;charset=utf-8');
+    showToast('일정 파일을 내보냈습니다.', 'success');
+  });
+
+  document.querySelector('#export-backup').addEventListener('click', () => {
+    const backup = {
+      format: 'mapdule-backup',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      profile: readStoredValue(PROFILE_STORAGE_KEY, {}),
+      events: loadSavedEvents()
+    };
+    downloadFile('mapdule-backup.json', JSON.stringify(backup, null, 2), 'application/json;charset=utf-8');
+    showToast('프로필과 일정을 백업했습니다.', 'success');
+  });
+
+  document.querySelector('#import-backup').addEventListener('click', () => document.querySelector('#backup-file').click());
+  document.querySelector('#backup-file').addEventListener('change', async (event) => {
+    const fileInput = event.currentTarget;
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      const backup = JSON.parse(await file.text());
+      if (backup.format !== 'mapdule-backup' || !Array.isArray(backup.events)) throw new Error('invalid backup');
+      const imported = backup.events.filter((item) => item
+        && typeof item.id === 'string'
+        && typeof item.title === 'string'
+        && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
+        && /^\d{2}:\d{2}$/.test(item.startTime)
+        && /^\d{2}:\d{2}$/.test(item.endTime));
+      showModal('백업 복원', `<p>${imported.length}개 일정을 현재 일정에 합칩니다.</p><p class="modal-note">같은 일정 ID는 백업 데이터로 갱신됩니다.</p>`, '복원', () => {
+        const merged = new Map(loadSavedEvents().map((item) => [item.id, item]));
+        imported.forEach((item) => merged.set(item.id, item));
+        if (!saveEvents([...merged.values()])) return false;
+        if (backup.profile && typeof backup.profile === 'object' && !Array.isArray(backup.profile)) {
+          try {
+            localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(backup.profile));
+          } catch {
+            showToast('일정은 복원했지만 프로필 저장에는 실패했습니다.', 'info');
+          }
+        }
+        renderCalendar();
+        showToast('백업을 복원했습니다.', 'success');
+        return true;
+      });
+    } catch {
+      showToast('올바른 MapDule 백업 파일이 아닙니다.', 'info');
+    } finally {
+      fileInput.value = '';
+    }
+  });
+
+  document.querySelector('#clear-local-data').addEventListener('click', () => {
+    showModal('저장 데이터 삭제', '<p>이 브라우저에 저장된 일정과 프로필을 모두 삭제할까요?</p><p class="modal-note">삭제한 데이터는 복구할 수 없습니다. 먼저 JSON 백업을 권장합니다.</p>', '모두 삭제', () => {
+      try {
+        localStorage.removeItem(EVENTS_STORAGE_KEY);
+        localStorage.removeItem(PROFILE_STORAGE_KEY);
+      } catch {
+        showToast('저장 데이터를 삭제할 수 없습니다.', 'info');
+        return false;
+      }
+      editingEventId = null;
+      manualEventForm.reset();
+      manualEventForm.elements.date.value = localDateString(selectedDate);
+      manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
+      manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
+      document.querySelector('.avatar').textContent = 'P';
+      renderCalendar();
+      showToast('일정과 프로필을 삭제했습니다.');
+      return true;
+    });
+  });
 
   document.querySelector('.sync-button')?.addEventListener('click', (event) => {
   const button = event.currentTarget;
