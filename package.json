@@ -5,7 +5,8 @@
   "description": "MapDule daily timeline and mobility planning UI",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check app.js && node --check server.js"
+    "check": "node --check app.js && node --check server.js && node --check api/src/ai-schedule.js && node --check api/src/functions/ai.js",
+    "test": "node --test tests/*.test.js"
   },
   "engines": {
     "node": ">=18"

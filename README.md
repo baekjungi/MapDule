@@ -1,11 +1,17 @@
 # MapDule (맵듈)
 
-일정과 이동을 함께 설계하는 모바일 우선 일정 관리 UI 프로토타입입니다.
+월간 일정표에서 날짜별 일정과 이동 경로를 확인하는 모바일 우선 일정 관리 UI 프로토타입입니다.
 
 ## 현재 구현 범위
 
-- 오늘의 시간순 타임라인
-- 일정 장소와 이동 경로를 보여주는 지도형 UI
+- 월간·주간·일간·일정 목록 보기와 날짜별 일정 표시
+- 사이드바 미니 달력 및 캘린더별 일정 표시 필터
+- 모바일 화면의 선택 날짜 일정 카드 및 빠른 일정 추가 버튼
+- 달력 빈 날짜에서 일정 생성, 일정 배지에서 수정·삭제
+- 종일 일정, 시간, 캘린더, 장소, 메모를 관리하는 공통 일정 모달
+- 모바일 햄버거 사이드바와 바텀 시트 일정 모달
+- 날짜를 선택해 상세 타임라인과 이동 경로를 확인하는 화면
+- 상단의 AI 일정 등록 진입 버튼
 - 지각 위험 알림 카드
 - 이동 시간 블록과 자투리 시간 퀘스트
 - AI 자연어 일정 등록 미리보기
@@ -15,7 +21,7 @@
 - `.ics` 캘린더 내보내기와 JSON 백업·복원·초기화
 - 모바일·데스크톱 반응형 레이아웃
 
-프로필과 직접 등록한 일정은 현재 브라우저의 로컬 저장소에 저장됩니다. 계정 간 동기화, 지도·교통·AI API는 아직 연결하지 않았습니다.
+프로필과 직접 등록한 일정은 현재 브라우저의 로컬 저장소에 저장됩니다. AI 일정 분석은 로컬 `server.js` 또는 Azure Static Web Apps Functions API가 Azure OpenAI를 호출하며, 브라우저에는 API 키를 전달하지 않습니다. 지도·교통 API와 계정 간 일정 동기화는 아직 연결하지 않았습니다.
 
 카카오 지도를 연결하려면 `index.html`의 `kakao-javascript-key` 메타 태그에 Kakao Developers의 JavaScript 키를 입력하고, Kakao Developers의 Web 플랫폼에 로컬 및 배포 도메인을 허용 목록으로 등록합니다. 키는 브라우저에 공개되므로 JavaScript 키만 사용하고 도메인 제한을 설정하세요.
 
@@ -23,12 +29,23 @@
 
 요구사항: Node.js 18 이상
 
+로컬에서 Azure OpenAI 분석을 사용하려면 `.env.example`을 복사해 `.env`를 만들고 발급받은 값으로 채웁니다.
+
+```env
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_API_KEY=your-api-key
+AZURE_OPENAI_DEPLOYMENT=your-deployment-name
+```
+
+실제 `.env`는 Git에서 제외됩니다. 키를 커밋하거나 브라우저 코드에 넣지 마세요. 설정 후 서버를 재시작합니다. 배포 사이트 설정은 [DEPLOYMENT.md](DEPLOYMENT.md)를 참고하세요.
+
 ```bash
 npm run check
 npm start
 ```
 
 브라우저에서 `http://localhost:4173`을 엽니다. 포트는 `PORT` 환경 변수로 바꿀 수 있습니다.
+AI 등록 화면에 문장을 입력하고 **AI로 일정 분석**을 누른 뒤, 분석된 일정과 시간을 확인하고 등록합니다.
 
 ```powershell
 $env:PORT=8080

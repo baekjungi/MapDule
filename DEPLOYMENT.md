@@ -13,10 +13,11 @@
 
 ## 프로젝트 구성
 
-이 저장소는 정적 HTML/CSS/브라우저 JavaScript 앱입니다. `server.js`는 로컬 미리보기용이며 Azure Static Web Apps에서는 실행하지 않습니다. 데이터베이스와 앱 런타임 환경변수는 현재 필요하지 않습니다.
+프런트엔드는 정적 HTML/CSS/브라우저 JavaScript 앱이고, `server.js`는 로컬 미리보기용입니다. 배포 사이트의 `/api/ai/*`는 `api/` 아래 Azure Functions가 처리합니다. 브라우저에는 Azure OpenAI 키를 보내지 않습니다.
 
 - 배포 경로: 저장소 루트 `/`
-- API 경로: 없음
+- API 경로: `api/`의 Azure Functions (`/api/ai/status`, `/api/ai/parse`)
+- API 런타임: `staticwebapp.config.json`에서 Node.js 22
 - 빌드 산출물 경로: 없음
 - Static Web Apps 빌드: 건너뜀
 - CI 검사: Node.js 22에서 `npm run check`
@@ -36,7 +37,7 @@ Static Web Apps Free는 현재 가격표상 월 $0입니다. 포함 한도는 �
 1. **Create a resource**에서 **Static Web Apps**를 선택합니다.
 2. 구독은 `왕선중 백준기`, 리소스 그룹은 `rg-mapdule-prod`, 이름은 사용 가능한 이름, 플랜은 **Free**, 지역은 **East Asia**로 설정합니다.
 3. 배포 원본은 **GitHub**로 선택하고 계정 `baekjungi`, 저장소 `MapDule`, 브랜치 `main`을 연결합니다.
-4. 빌드 세부 설정은 **Custom**으로 지정하고 앱 위치는 `/`, API 위치와 출력 위치는 비워 둡니다.
+4. 빌드 세부 설정은 **Custom**으로 지정하고 앱 위치는 `/`, API 위치는 `api`, 출력 위치는 비워 둡니다.
 5. 검토 후 생성합니다. Azure가 GitHub Actions 워크플로와 배포 Secret을 생성합니다.
 
 ### 현재 배포 확인
@@ -46,7 +47,15 @@ Static Web Apps Free는 현재 가격표상 월 $0입니다. 포함 한도는 �
 3. **Overview**에서 상태, 지역, 플랜, 기본 도메인을 확인합니다.
 4. **Deployment history** 또는 GitHub 저장소의 **Actions** 탭에서 배포 결과를 확인합니다.
 5. 설정을 변경할 때는 GitHub 연결이 `baekjungi/MapDule` / `main`인지 확인합니다.
-6. 별도 백엔드가 없으므로 **Environment variables / Application settings**는 추가하지 않습니다.
+6. **Configuration**의 애플리케이션 설정에 아래 Azure OpenAI 설정을 추가합니다. 값은 비밀이므로 브라우저 코드, GitHub 저장소, 배포 로그에 넣지 마세요.
+
+   - `AZURE_OPENAI_ENDPOINT`: Azure OpenAI 리소스의 HTTPS endpoint
+   - `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
+   - `AZURE_OPENAI_DEPLOYMENT`: 배포된 모델의 deployment 이름
+
+7. 설정을 저장한 뒤 Static Web App API 설정이 반영되도록 배포를 다시 실행합니다. API 키는 API 함수의 서버 환경변수로만 읽힙니다.
+
+AI API는 로그인 기능이 아직 없는 공개 웹앱에 맞춰 익명 호출을 허용합니다. 따라서 API 경로를 아는 누구나 Azure OpenAI 호출을 시도할 수 있습니다. Azure OpenAI의 사용량 한도와 모니터링을 설정하고, 공개 트래픽이 늘어나면 인증 또는 별도 rate-limit 계층을 추가하세요.
 
 ## GitHub Actions 및 인증
 
@@ -64,11 +73,11 @@ Static Web Apps의 기본 배포 작업은 `azure_static_web_apps_api_token`을 
 ## 이후 배포 흐름
 
 1. 코드와 설정을 수정합니다.
-2. 로컬에서 `npm run check`를 실행합니다.
-3. 변경을 커밋하고 `main`에 푸시합니다.
-4. GitHub Actions가 검사를 실행합니다.
-5. 검사가 성공하면 Static Web Apps가 새 정적 파일을 배포합니다.
-6. Actions의 두 작업과 위 웹사이트에서 결과를 확인합니다.
+2. Azure Portal의 Static Web App 애플리케이션 설정에 세 가지 Azure OpenAI 설정값이 있는지 확인합니다.
+3. 로컬에서 `npm run check`를 실행합니다.
+4. 변경을 `main`에 푸시합니다.
+5. GitHub Actions가 검사를 실행하고 `api/`의 Azure Functions API와 정적 프런트엔드를 함께 배포합니다.
+6. Actions의 두 작업과 위 웹사이트에서 결과를 확인합니다. AI 화면의 설정 상태가 `Azure OpenAI 준비됨`이어야 합니다.
 
 ## 로컬 실행
 
@@ -77,7 +86,7 @@ npm run check
 npm start
 ```
 
-브라우저에서 `http://localhost:4173`을 엽니다. 앱 기능 코드는 Azure 배포를 위해 변경하지 않았습니다.
+브라우저에서 `http://localhost:4173`을 엽니다. 로컬 개발은 `.env`를 사용하고, 배포 앱은 Azure Portal의 Static Web App 애플리케이션 설정을 사용합니다.
 
 ## 공식 문서
 

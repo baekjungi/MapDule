@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,500,0..1,0..200" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="calendar-visible">
   <main class="app-shell">
     <header class="topbar">
       <a class="brand" href="#today" aria-label="MapDule 오늘 화면">
@@ -20,23 +20,59 @@
         <span><strong>MapDule</strong><small>TODAY TIMELINE</small></span>
       </a>
       <div class="top-actions">
+        <button class="calendar-menu-button" type="button" aria-label="캘린더 메뉴 열기"><span class="material-symbols-rounded">menu</span></button>
+        <button class="ai-register-button" type="button" data-view="ai"><span class="material-symbols-rounded">auto_awesome</span><span>AI 일정 등록</span></button>
         <span class="status-pill"><i></i>서초동</span>
         <button class="icon-button" aria-label="알림"><span class="material-symbols-rounded">notifications</span></button>
         <button class="avatar" aria-label="프로필">김</button>
       </div>
     </header>
 
-    <section id="today" class="view active" aria-labelledby="today-title">
+    <section id="today" class="view active" aria-labelledby="calendar-title">
+      <div class="calendar-layout">
+        <aside class="calendar-sidebar" aria-label="캘린더 사이드바">
+          <button class="create-event-button" type="button"><span class="material-symbols-rounded">add</span>새 일정 추가</button>
+          <section class="mini-calendar-section" aria-label="미니 달력">
+            <div class="mini-calendar-heading"><strong class="mini-calendar-title"></strong><div><button type="button" class="mini-month-prev" aria-label="이전 달"><span class="material-symbols-rounded">chevron_left</span></button><button type="button" class="mini-month-next" aria-label="다음 달"><span class="material-symbols-rounded">chevron_right</span></button></div></div>
+            <div class="mini-month-grid"><div class="mini-weekday sunday">일</div><div class="mini-weekday">월</div><div class="mini-weekday">화</div><div class="mini-weekday">수</div><div class="mini-weekday">목</div><div class="mini-weekday">금</div><div class="mini-weekday saturday">토</div><div class="mini-calendar-days"></div></div>
+          </section>
+          <section class="calendar-list-section" aria-label="내 캘린더">
+            <h2>내 캘린더</h2>
+            <div class="calendar-list"></div>
+          </section>
+          <button class="sidebar-today-button" type="button"><span class="material-symbols-rounded">today</span>오늘로 이동</button>
+        </aside>
+        <div class="sidebar-scrim"></div>
+        <section class="calendar-main" aria-label="일정 캘린더">
+          <div class="calendar-main-header">
+            <div class="calendar-month-navigation">
+              <div><span class="calendar-eyebrow">MY SCHEDULE</span><h1 id="calendar-title"></h1></div>
+              <div class="calendar-controls">
+                <button class="text-icon main-month-prev" type="button" aria-label="이전 달"><span class="material-symbols-rounded">chevron_left</span></button>
+                <button class="text-icon main-month-next" type="button" aria-label="다음 달"><span class="material-symbols-rounded">chevron_right</span></button>
+                <button class="calendar-today-button" type="button">오늘</button>
+              </div>
+            </div>
+            <label class="view-select-label"><span class="material-symbols-rounded">calendar_view_month</span><select class="calendar-view-select" aria-label="캘린더 보기"><option value="month">월</option><option value="week">주</option><option value="day">일</option><option value="agenda">일정 목록</option></select><span class="material-symbols-rounded select-chevron">expand_more</span></label>
+          </div>
+          <div class="calendar-view-content"></div>
+          <section class="mobile-selected-day" aria-label="선택한 날짜 일정" aria-live="polite"></section>
+        </div>
+      </div>
+      <button class="mobile-create-event-button" type="button"><span class="material-symbols-rounded">add</span><span>일정 추가</span></button>
+    </section>
+
+    <section id="day-detail" class="view" aria-labelledby="today-title">
       <section class="date-panel panel">
         <div class="date-heading"><button class="text-icon" aria-label="이전 날짜"><span class="material-symbols-rounded">chevron_left</span></button><h1 id="today-title">오늘, 9월 24일 <em>(수)</em></h1><button class="text-icon" aria-label="다음 날짜"><span class="material-symbols-rounded">chevron_right</span></button><button class="sync-button"><span class="material-symbols-rounded">my_location</span>실시간 동기화</button></div>
         <div class="week-strip" aria-label="주간 날짜 선택"><button>일<strong>21</strong></button><button>월<strong>22</strong></button><button>화<strong>23</strong></button><button class="selected">수<strong>24</strong><i></i></button><button>목<strong>25</strong></button><button>금<strong>26</strong></button><button>토<strong>27</strong></button></div>
+        <button class="detail-back-button" type="button" data-view="today"><span class="material-symbols-rounded">arrow_back</span>월간 일정표</button>
       </section>
 
       <section class="map-card panel" aria-label="오늘의 이동 경로">
         <div class="map-grid"></div><div class="map-road road-a"></div><div class="map-road road-b"></div><div class="route-line"></div>
         <div class="map-label label-one"><b>1</b> 판교</div><div class="map-label label-two"><b>2</b> 강남</div><div class="map-label label-three"><b>3</b> 성수</div><span class="you-are-here">현재 위치</span>
-        <div class="map-top"><span><i></i>동선 4개 연결 중</span><button><span class="material-symbols-rounded">layers</span>3D 전체 지도</button></div>
-        <div class="map-bottom"><span><span class="material-symbols-rounded">route</span>총 이동 24.8km</span><strong>예상 총 소요 1시간 42분</strong></div>
+        <div class="map-top"><span><i></i>선택한 날짜의 일정 지도</span><button class="map-location-button" type="button" aria-label="현재 위치 표시"><span class="material-symbols-rounded">my_location</span>내 위치</button></div>
       </section>
 
       <section class="timeline" aria-label="오늘 일정 타임라인">
@@ -48,6 +84,7 @@
         <article class="timeline-row quest"><div class="time-node"><b><span class="material-symbols-rounded">local_cafe</span></b></div><div class="quest-card"><div class="card-meta"><span class="tag mint"><span class="material-symbols-rounded">auto_awesome</span> 자투리 힐링 퀘스트</span><span>에너지 +15 회복</span></div><h3>☕ 35분 여유 시간 발견!</h3><p>성수역 도착 후 근처 <b>블루보틀 성수</b>에서 커피 브레이크를 추천해요.</p><div class="quest-actions"><button class="accept-quest">일정에 담기</button><button class="skip-quest">건너뛰기</button></div></div></article>
         <article class="timeline-row"><div class="time-node"><b><span class="material-symbols-rounded">fitness_center</span></b><time>19:00</time></div><div class="event-card"><div class="card-meta"><span class="tag lavender">건강 / 운동</span><span class="quiet">피로도 해소</span></div><h2>사당역 홈트레이닝 & 스트레칭</h2><p><span class="material-symbols-rounded">home</span>방배레지던스 피트니스 존</p></div></article>
       </section>
+      <button class="detail-add-event-button" type="button"><span class="material-symbols-rounded">add</span>이 날짜에 일정 등록</button>
     </section>
 
     <section id="ai" class="view" aria-labelledby="ai-title"><div class="section-heading"><div class="section-icon indigo-bg"><span class="material-symbols-rounded">auto_awesome</span></div><div><h1 id="ai-title">AI 스마트 일정 등록</h1><p>자연어 문장을 인식해 동선과 일정을 조율합니다</p></div><button class="round-close" data-view="today" aria-label="닫기"><span class="material-symbols-rounded">close</span></button></div><div class="prompt-card panel"><div class="card-meta"><span class="eyebrow">● NATURAL LANGUAGE PROMPT</span><span class="tag mint">✓ AI 실시간 분석 완료</span></div><p class="prompt">“내일 오후 3시에 강남역에서 민수 만나서 카페 가고 저녁 7시에 집에 와서 운동할 거야”</p><div class="prompt-actions"><span class="voice-pill"><span class="material-symbols-rounded">graphic_eq</span>음성 분석 정확도 99%</span><button class="link-button"><span class="material-symbols-rounded">edit_note</span>문장 재입력</button></div></div><div class="section-title"><h2><span class="material-symbols-rounded">route</span>구조화 일정 및 이동 예측</h2><small>총 2개 일정 · 이동 1건</small></div><div class="ai-stack"><div class="ai-event panel"><time>15:00<span class="material-symbols-rounded">local_cafe</span></time><div><h3>민수와 카페 미팅 <span class="tag indigo">약속/친목</span></h3><p><span class="material-symbols-rounded">location_on</span>강남역 알베르 <i>•</i> 피로도 보통</p><div class="match-box"><span class="material-symbols-rounded">storefront</span><span><b>알베르 (카페 · 디저트)</b><small>강남역 11번 출구 도보 6분</small></span><strong>자동 매칭</strong></div></div></div><div class="ai-travel"><span class="material-symbols-rounded">subway</span><span><b>28분 소요</b> <small>지하철 2호선</small><small>강남역 → 신림 자택</small></span><em>권장 출발<br><b>18:20</b></em></div><div class="ai-event panel"><time>19:00<span class="material-symbols-rounded">fitness_center</span></time><div><h3>홈트레이닝 및 유산소 <span class="tag green">운동/건강</span></h3><p><span class="material-symbols-rounded">home</span>집 (신림) <i>•</i> <b class="danger-text">체력 소모 높음</b></p><div class="energy-box"><span class="material-symbols-rounded">bolt</span><span><b>목표 50분 루틴</b><small>예상 에너지 소모 +20 pts</small></span><strong>+20 E-pts</strong></div></div></div></div><div class="suggestion panel"><div class="section-icon indigo-bg"><span class="material-symbols-rounded">psychology_alt</span></div><div><h2>스마트 조율 제안 <span class="tag slate">FR-05</span></h2><p>강남역 미팅 종료 후 귀가 출발까지 <b>약 2시간 30분의 공백</b>이 생깁니다. 중간 일정을 추가하시겠습니까?</p><div class="suggestion-actions"><button id="add-dinner"><span class="material-symbols-rounded">restaurant</span>중간 저녁 식사 추가</button><button id="keep-original">✓ 그대로 등록</button></div><div id="dinner-recommendation" class="recommendation hidden"><b>추천: 강남역 가벼운 키토 샐러드 · 포케</b><span>17:00 ~ 18:00</span><small>운동 전 단백질 보충과 이동 경로 최적화</small></div></div></div><div class="preview panel"><div><b>내일 예상 타임라인 프리뷰</b><span>15:00 - 20:00</span></div><div class="preview-bar"><i>15:00 미팅</i><span>여유 1h 50m</span><i class="cyan">이동</i><i class="green">19:00 운동</i></div></div><button class="primary-cta"><span class="material-symbols-rounded">calendar_add_on</span>총 2개 일정 및 이동 1건 캘린더에 추가하기</button><button class="manual-link">수동으로 직접 수정하기</button></section>
