@@ -103,13 +103,40 @@ async function parseSchedulePrompt(prompt) {
   if (url.protocol !== 'https:' || url.username || url.password) {
     throw createAiError(500, 'AZURE_OPENAI_ENDPOINT는 자격 증명이 포함되지 않은 HTTPS 주소여야 합니다.', 'INVALID_AZURE_ENDPOINT');
   }
-  const basePath = url.pathname.replace(/\/+$/, '');
-  url.pathname = basePath.endsWith('/openai/v1')
-    ? `${basePath}/chat/completions`
-    : `${basePath}/openai/v1/chat/completions`;
+  const endpointPath = url.pathname.replace(/\/+$/, '');
+  const versionedEndpoint = endpointPath.match(/^(.*\/openai\/v1)(?:\/(responses|chat\/completions))?$/);
+  let apiMode = 'chat';
+  if (versionedEndpoint) {
+    apiMode = versionedEndpoint[2] === 'responses' ? 'responses' : 'chat';
+    url.pathname = `${versionedEndpoint[1]}/${apiMode === 'responses' ? 'responses' : 'chat/completions'}`;
+  } else if (!endpointPath) {
+    url.pathname = '/openai/v1/chat/completions';
+  } else {
+    throw createAiError(
+      500,
+      'AZURE_OPENAI_ENDPOINT에는 Azure OpenAI 리소스 주소 또는 /openai/v1 endpoint를 입력해 주세요.',
+      'INVALID_AZURE_ENDPOINT'
+    );
+  }
   url.search = '';
 
-  const systemMessage = `너는 한국어 일정 문장을 캘린더 일정으로 변환하는 도우미다. 기준 날짜는 한국 시간 오늘 ${getKoreaDate()}이다. 상대 날짜(오늘, 내일, 모레, 이번 주 금요일 등)는 이 기준으로 계산한다. 사용자가 명시한 일정만 분리하고, 최대 20개까지 반환한다. 시간이 없으면 오전 9시 시작, 1시간 일정으로 설정하고 assumptions에 그 가정을 알린다. 종료 시간이 없으면 시작 시간부터 1시간으로 설정한다. 종일 여부가 명확할 때만 allDay를 true로 한다. category는 약속, 업무, 운동, 개인, 기타 중 하나다. 모든 문자열은 한국어로 작성한다. 응답은 반드시 다음 구조의 JSON 객체만 반환한다: {"events":[{"title":"일정 제목","date":"YYYY-MM-DD","startTime":"HH:mm","endTime":"HH:mm","allDay":false,"category":"약속","location":"","notes":""}],"assumptions":[]}. 일정이 없으면 events는 빈 배열이다.`;
+  const systemMessage = `너는 한국어 일정 문장을 캘린더 일정으로 변환하는 도우미다. 기준 날짜는 한국 시간 오늘 ${getKoreaDate()}이다. 상대 날짜(오늘, 내일, 모레, 이번 주 금요일 등)는 이 기준으로 계산한다. 사용자가 명시한 일정만 분리하고, 최대 20개까지 반환한다. 시간이 없으면 오전 9시 시작, 1시간 일정으로 설정하고 assumptions에 그 가정을 알린다. 종료 시간이 없으면 시작 시간부터 1시간으로 설정한다. 종일 여부가 명확할 때만 allDay를 true로 한다. category는 약속, 업무, 운동, 개인, 기타 중 하나다. 모든 문자열은 한국어로 작성한다. 반드시 json 형식의 JSON 객체로만 응답하고 다음 구조를 따른다: {"events":[{"title":"일정 제목","date":"YYYY-MM-DD","startTime":"HH:mm","endTime":"HH:mm","allDay":false,"category":"약속","location":"","notes":""}],"assumptions":[]}. 일정이 없으면 events는 빈 배열이다.`;
+  const requestBody = apiMode === 'responses'
+    ? {
+      model: process.env.AZURE_OPENAI_DEPLOYMENT,
+      instructions: systemMessage,
+      input: `다음 문장을 json 형식의 일정 데이터로 변환해 주세요.\n\n${prompt.trim()}`,
+      text: { format: { type: 'json_object' } }
+    }
+    : {
+      model: process.env.AZURE_OPENAI_DEPLOYMENT,
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: systemMessage },
+        { role: 'user', content: prompt.trim() }
+      ]
+    };
 
   let azureResponse;
   try {
@@ -119,15 +146,7 @@ async function parseSchedulePrompt(prompt) {
         'Content-Type': 'application/json',
         'api-key': process.env.AZURE_OPENAI_API_KEY
       },
-      body: JSON.stringify({
-        model: process.env.AZURE_OPENAI_DEPLOYMENT,
-        response_format: { type: 'json_object' },
-        temperature: 0.2,
-        messages: [
-          { role: 'system', content: systemMessage },
-          { role: 'user', content: prompt.trim() }
-        ]
-      }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(45_000)
     });
   } catch (error) {
@@ -141,7 +160,13 @@ async function parseSchedulePrompt(prompt) {
   }
 
   if (!azureResponse.ok) {
-    console.error(`Azure OpenAI request failed with status ${azureResponse.status}.`);
+    let azureErrorCode;
+    try {
+      azureErrorCode = (await azureResponse.json()).error?.code;
+    } catch {
+      azureErrorCode = undefined;
+    }
+    console.error(`Azure OpenAI request failed with status ${azureResponse.status}${azureErrorCode ? ` (${azureErrorCode})` : ''}.`);
     if (azureResponse.status === 429) {
       throw createAiError(503, 'Azure OpenAI 사용량 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.', 'AZURE_OPENAI_RATE_LIMITED');
     }
@@ -157,7 +182,10 @@ async function parseSchedulePrompt(prompt) {
   } catch {
     throw createAiError(502, 'Azure OpenAI가 올바른 JSON 응답을 반환하지 않았습니다.', 'AZURE_OPENAI_INVALID_RESPONSE');
   }
-  const content = completion.choices?.[0]?.message?.content;
+  const content = apiMode === 'responses'
+    ? completion.output?.flatMap((item) => item.content || []).find((item) => item.type === 'output_text')?.text
+      || completion.output_text
+    : completion.choices?.[0]?.message?.content;
   if (typeof content !== 'string') {
     throw createAiError(502, 'Azure OpenAI 응답에서 일정 내용을 찾지 못했습니다.', 'AZURE_OPENAI_EMPTY_RESPONSE');
   }

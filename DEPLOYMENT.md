@@ -53,6 +53,8 @@ Static Web Apps Free는 현재 가격표상 월 $0입니다. 포함 한도는 �
    - `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
    - `AZURE_OPENAI_DEPLOYMENT`: 배포된 모델의 deployment 이름
 
+`AZURE_OPENAI_ENDPOINT`에는 리소스 기본 주소 또는 `/openai/v1` endpoint를 사용합니다. `/openai/v1/responses`로 끝나는 주소는 Responses API로 호출됩니다.
+
 7. 설정을 저장한 뒤 Static Web App API 설정이 반영되도록 배포를 다시 실행합니다. API 키는 API 함수의 서버 환경변수로만 읽힙니다.
 
 AI API는 로그인 기능이 아직 없는 공개 웹앱에 맞춰 익명 호출을 허용합니다. 따라서 API 경로를 아는 누구나 Azure OpenAI 호출을 시도할 수 있습니다. Azure OpenAI의 사용량 한도와 모니터링을 설정하고, 공개 트래픽이 늘어나면 인증 또는 별도 rate-limit 계층을 추가하세요.
