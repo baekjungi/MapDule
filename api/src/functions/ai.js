@@ -15,7 +15,7 @@ app.http('ai-status', {
   methods: ['GET'],
   authLevel: 'anonymous',
   route: 'ai/status',
-  handler: async () => jsonResponse(200, getAiStatus())
+  handler: async () => jsonResponse(200, { ...getAiStatus(), authRequired: true })
 });
 
 app.http('ai-parse', {

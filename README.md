@@ -20,8 +20,12 @@
 - 수동 일정 등록, 수정, 삭제 및 시간 중복 방지
 - `.ics` 캘린더 내보내기와 JSON 백업·복원·초기화
 - 모바일·데스크톱 반응형 레이아웃
+- 가족 그룹: 초대 코드·링크, 공유 일정 및 참석자 선택
+- 출발 알리기부터 도착까지의 위치 공유와 가족 지도
 
-프로필과 직접 등록한 일정은 현재 브라우저의 로컬 저장소에 저장됩니다. AI 일정 분석은 로컬 `server.js` 또는 Azure Static Web Apps Functions API가 Azure OpenAI를 호출하며, 브라우저에는 API 키를 전달하지 않습니다. 지도·교통 API와 계정 간 일정 동기화는 아직 연결하지 않았습니다.
+프로필과 개인 일정은 브라우저 로컬 저장소에 저장됩니다. 가족 일정과 이동 상태는 로컬에서 `.mapdule-data/` 파일, Azure 배포에서는 Table Storage에 저장합니다. Azure에 `MAPDULE_STORAGE_CONNECTION_STRING`을 등록해야 가족 공유 기능이 활성화됩니다. 자세한 내용은 [DEPLOYMENT.md](DEPLOYMENT.md)를 참고하세요.
+
+AI 일정 분석은 서버에서 Azure OpenAI를 호출하며 브라우저에는 API 키를 전달하지 않습니다. 대중교통·도로 길찾기 API는 아직 연결되지 않아 도착 예상 시간은 직선거리 기반 추정입니다.
 
 카카오 지도를 연결하려면 `index.html`의 `kakao-javascript-key` 메타 태그에 Kakao Developers의 JavaScript 키를 입력하고, Kakao Developers의 Web 플랫폼에 로컬 및 배포 도메인을 허용 목록으로 등록합니다. 키는 브라우저에 공개되므로 JavaScript 키만 사용하고 도메인 제한을 설정하세요.
 
@@ -54,7 +58,7 @@ npm start
 
 ## 배포
 
-이 프로젝트는 빌드 단계가 없는 정적 웹앱입니다.
+이 프로젝트는 정적 웹앱이며, 배포 시 공개할 HTML·CSS·JavaScript만 `dist/`에 모읍니다.
 
 - Azure Static Web Apps Free에 배포되어 있습니다.
 - `main` 브랜치에 푸시하면 GitHub Actions 검사 후 자동 배포됩니다.

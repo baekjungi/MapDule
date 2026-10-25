@@ -1,5 +1,19 @@
 {
   "platform": {
     "apiRuntime": "node:22"
+  },
+  "routes": [
+    {
+      "route": "/api/ai/parse",
+      "allowedRoles": ["authenticated"]
+    }
+  ],
+  "globalHeaders": {
+    "Content-Security-Policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net https://t1.kakaocdn.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.kakao.com https://*.daumcdn.net",
+    "Strict-Transport-Security": "max-age=31536000",
+    "Permissions-Policy": "geolocation=(self), camera=(), microphone=()",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
   }
 }

@@ -11,17 +11,19 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,500,0..1,0..200" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="family.css">
 </head>
 <body class="calendar-visible">
   <main class="app-shell">
     <header class="topbar">
       <a class="brand" href="#today" aria-label="MapDule 오늘 화면">
         <span class="brand-mark"><span class="material-symbols-rounded">schedule</span><i></i></span>
-        <span><strong>MapDule</strong><small>TODAY TIMELINE</small></span>
+        <span><strong>MapDule</strong><small>하루 동선 플래너</small></span>
       </a>
       <div class="top-actions">
         <button class="calendar-menu-button" type="button" aria-label="캘린더 메뉴 열기"><span class="material-symbols-rounded">menu</span></button>
-        <button class="ai-register-button" type="button" data-view="ai"><span class="material-symbols-rounded">auto_awesome</span><span>AI 일정 등록</span></button>
+        <button class="family-header-button" type="button" data-view="family" aria-label="가족" title="가족"><span class="material-symbols-rounded">family_restroom</span><span>가족</span></button>
+        <button class="ai-register-button" type="button" data-view="ai" aria-label="AI 일정 등록" title="AI 일정 등록"><span class="material-symbols-rounded">auto_awesome</span><span>AI 일정 등록</span></button>
         <span class="status-pill"><i></i>서초동</span>
         <button class="icon-button" aria-label="알림"><span class="material-symbols-rounded">notifications</span></button>
         <button class="avatar" aria-label="프로필">김</button>
@@ -46,7 +48,7 @@
         <section class="calendar-main" aria-label="일정 캘린더">
           <div class="calendar-main-header">
             <div class="calendar-month-navigation">
-              <div><span class="calendar-eyebrow">MY SCHEDULE</span><h1 id="calendar-title"></h1></div>
+              <div><span class="calendar-eyebrow">내 일정</span><h1 id="calendar-title"></h1></div>
               <div class="calendar-controls">
                 <button class="text-icon main-month-prev" type="button" aria-label="이전 달"><span class="material-symbols-rounded">chevron_left</span></button>
                 <button class="text-icon main-month-next" type="button" aria-label="다음 달"><span class="material-symbols-rounded">chevron_right</span></button>
@@ -59,12 +61,12 @@
           <section class="mobile-selected-day" aria-label="선택한 날짜 일정" aria-live="polite"></section>
         </div>
       </div>
-      <button class="mobile-create-event-button" type="button"><span class="material-symbols-rounded">add</span><span>일정 추가</span></button>
+      <button class="mobile-create-event-button" type="button" aria-label="일정 추가" title="일정 추가"><span class="material-symbols-rounded">add</span></button>
     </section>
 
     <section id="day-detail" class="view" aria-labelledby="today-title">
       <section class="date-panel panel">
-        <div class="date-heading"><button class="text-icon" aria-label="이전 날짜"><span class="material-symbols-rounded">chevron_left</span></button><h1 id="today-title">오늘, 9월 24일 <em>(수)</em></h1><button class="text-icon" aria-label="다음 날짜"><span class="material-symbols-rounded">chevron_right</span></button><button class="sync-button"><span class="material-symbols-rounded">my_location</span>실시간 동기화</button></div>
+        <div class="date-heading"><button class="text-icon" aria-label="이전 날짜"><span class="material-symbols-rounded">chevron_left</span></button><h1 id="today-title">오늘, 9월 24일 <em>(수)</em></h1><button class="text-icon" aria-label="다음 날짜"><span class="material-symbols-rounded">chevron_right</span></button><button class="sync-button"><span class="material-symbols-rounded">sync</span>가족 새로고침</button></div>
         <div class="week-strip" aria-label="주간 날짜 선택"><button>일<strong>21</strong></button><button>월<strong>22</strong></button><button>화<strong>23</strong></button><button class="selected">수<strong>24</strong><i></i></button><button>목<strong>25</strong></button><button>금<strong>26</strong></button><button>토<strong>27</strong></button></div>
         <button class="detail-back-button" type="button" data-view="today"><span class="material-symbols-rounded">arrow_back</span>월간 일정표</button>
       </section>
@@ -91,9 +93,12 @@
 
     <section id="midpoint" class="view compact-view" aria-labelledby="midpoint-title"><div class="section-heading"><div class="section-icon cyan-bg"><span class="material-symbols-rounded">hub</span></div><div><h1 id="midpoint-title">약속 지점 찾기</h1><p>모두에게 공평한 중간역을 찾아요</p></div></div><div class="midpoint-hero panel"><div class="orb"><span class="material-symbols-rounded">groups</span></div><h2>친구들의 출발 위치를<br>입력해 주세요</h2><p>이동 시간이 가장 균등한 장소와<br>주변 카페를 추천해 드립니다.</p><button class="primary-cta">출발 위치 추가하기 <span class="material-symbols-rounded">add</span></button></div><div class="demo-result panel"><div class="card-meta"><span class="tag mint">BEST MATCH</span><span>3명 기준</span></div><h2>서울숲역</h2><p>평균 이동 26분 · 최대 편차 4분</p><div class="people-times"><span>민수 <b>24분</b></span><span>지영 <b>26분</b></span><span>나 <b>28분</b></span></div><button class="secondary-cta">주변 카페 12곳 보기 <span class="material-symbols-rounded">arrow_forward</span></button></div></section>
 
+    <section id="family" class="view compact-view" aria-labelledby="family-title"></section>
+
     <div class="ai-brief"><span class="material-symbols-rounded">auto_awesome</span><span><b>AI 이동 브리핑</b><small>성수역 미팅까지 지연 우려 · 지금 출발하세요</small></span><button>빠른 길</button></div>
-    <nav class="bottom-nav" aria-label="주요 메뉴"><button class="nav-item active" data-view="today"><span class="material-symbols-rounded">calendar_today</span><small>오늘</small></button><button class="nav-item ai-nav" data-view="ai"><span class="material-symbols-rounded">auto_awesome</span><small>AI 등록</small></button><button class="nav-item" data-view="midpoint"><span class="material-symbols-rounded">hub</span><small>약속 지점</small></button></nav>
+    <nav class="bottom-nav" aria-label="주요 메뉴"><button class="nav-item active" data-view="today"><span class="material-symbols-rounded">calendar_today</span><small>오늘</small></button><button class="nav-item ai-nav" data-view="ai"><span class="material-symbols-rounded">auto_awesome</span><small>AI 등록</small></button><button class="nav-item" data-view="midpoint"><span class="material-symbols-rounded">hub</span><small>약속 지점</small></button><button class="nav-item" data-view="family"><span class="material-symbols-rounded">family_restroom</span><small>가족</small></button></nav>
   </main>
   <script src="app.js"></script>
+  <script src="family.js"></script>
 </body>
 </html>

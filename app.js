@@ -8,8 +8,9 @@ let currentLocationMarker = null;
 let displayedMonth = new Date();
 let calendarViewMode = 'month';
 let analyzedScheduleEvents = [];
-const visibleCalendars = new Set(['personal', 'work', 'health', 'other']);
+const visibleCalendars = new Set(['family', 'personal', 'work', 'health', 'other']);
 const calendarGroups = [
+  { id: 'family', name: '우리 가족', color: '#ef7d57', categories: ['가족'] },
   { id: 'personal', name: '개인', color: '#6f70d7', categories: ['개인', '약속'] },
   { id: 'work', name: '업무', color: '#e4a13b', categories: ['업무'] },
   { id: 'health', name: '운동', color: '#38a77c', categories: ['운동'] },
@@ -160,7 +161,7 @@ function initializeKakaoMap() {
   if (!key || !mapCanvas || !fallback) return;
 
   const script = document.createElement('script');
-  script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`;
+  script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&libraries=services&autoload=false`;
   script.async = true;
   script.onload = () => {
     if (!window.kakao?.maps?.load) {
@@ -173,6 +174,7 @@ function initializeKakaoMap() {
         level: 8
       });
       fallback.hidden = true;
+      window.MapDuleFamily?.updateDayMap();
     });
   };
   script.onerror = () => {
@@ -264,6 +266,9 @@ function showView(id) {
   document.body.classList.toggle('calendar-visible', id === 'today');
   document.body.classList.remove('sidebar-open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  // 숨겨진 상태에서 만든 카카오 지도는 크기가 0이라, 화면이 보일 때 다시 계산해야 한다.
+  if (id === 'day-detail') requestAnimationFrame(() => kakaoMap?.relayout());
+  window.MapDuleFamily?.onViewShown(id);
 }
 
 document.addEventListener('click', (event) => {
@@ -277,7 +282,8 @@ document.querySelector('.brand')?.addEventListener('click', (event) => {
 });
 
 document.querySelector('[aria-label="알림"]')?.addEventListener('click', () => {
-  showModal('알림 센터', '<p>새로운 이동 알림이 없습니다.</p><p class="modal-note">지각 위험이 감지되면 이곳에 가장 먼저 표시됩니다.</p>', '닫기');
+  const familyNotifications = window.MapDuleFamily?.notificationsHtml() || '';
+  showModal('알림 센터', familyNotifications || '<p>새로운 알림이 없습니다.</p><p class="modal-note">가족이 출발하거나 도착하면 이곳에 표시됩니다.</p>', '닫기');
 });
 
 document.querySelector('[aria-label="프로필"]')?.addEventListener('click', () => {
@@ -327,7 +333,7 @@ function setSelectedDate(date, announce = false) {
     dateForButton.setDate(weekStart.getDate() + index);
     const iso = localDateString(dateForButton);
     const weekday = ['일', '월', '화', '수', '목', '금', '토'][index];
-    const hasEvents = loadSavedEvents().some((item) => item.date === iso);
+    const hasEvents = allEvents().some((item) => item.date === iso);
     button.innerHTML = `${weekday}<strong>${dateForButton.getDate()}</strong>${hasEvents ? '<i></i>' : ''}`;
     button.classList.toggle('selected', iso === localDateString(selectedDate));
     return { day: weekday, date: dateForButton.getDate(), iso, selected: iso === localDateString(selectedDate) };
@@ -364,13 +370,20 @@ function calendarIdForEvent(item) {
 function openEventFormModal(mode = 'create', existingEvent = null, initialDate = localDateString(selectedDate)) {
   document.querySelector('.event-modal-backdrop')?.remove();
   const isEditing = mode === 'edit' && existingEvent;
+  const family = window.MapDuleFamily;
+  const familyJoined = Boolean(family?.isJoined());
   const selectedCalendar = isEditing ? calendarIdForEvent(existingEvent) : 'personal';
+  const selectableCalendars = calendarGroups.filter((group) => group.id !== 'family' || familyJoined || selectedCalendar === 'family');
+  const participantIds = new Set(isEditing && existingEvent.participants ? existingEvent.participants : [family?.me()].filter(Boolean));
+  const participantOptions = familyJoined
+    ? family.members().map((member) => `<label class="participant-option" style="--member-color:${member.color}"><input type="checkbox" name="participants" value="${escapeHtml(member.id)}" ${participantIds.has(member.id) ? 'checked' : ''}><span>${escapeHtml(member.name)}${member.id === family.me() ? ' (나)' : ''}</span></label>`).join('')
+    : '';
   const modal = document.createElement('div');
   modal.className = 'event-modal-backdrop';
   modal.innerHTML = `
     <section class="event-form-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title">
       <header class="event-modal-header">
-        <div><span class="event-modal-eyebrow">${isEditing ? 'EDIT EVENT' : 'NEW EVENT'}</span><h2 id="event-modal-title">${isEditing ? '일정 수정' : '새 일정'}</h2></div>
+        <div><span class="event-modal-eyebrow">${isEditing ? '수정하기' : '새로 만들기'}</span><h2 id="event-modal-title">${isEditing ? '일정 수정' : '새 일정'}</h2></div>
         <button type="button" class="event-modal-close" aria-label="닫기"><span class="material-symbols-rounded">close</span></button>
       </header>
       <form class="event-modal-form">
@@ -382,7 +395,8 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
           <span class="event-time-separator">—</span>
           <label class="event-form-field"><span>종료</span><input name="endTime" type="time" value="${escapeHtml(isEditing ? existingEvent.endTime || '10:00' : '10:00')}"></label>
         </div>
-        <label class="event-form-field"><span>내 캘린더</span><select name="calendarId">${calendarGroups.map((group) => `<option value="${group.id}" ${selectedCalendar === group.id ? 'selected' : ''}>${group.name}</option>`).join('')}</select></label>
+        <label class="event-form-field"><span>캘린더</span><select name="calendarId">${selectableCalendars.map((group) => `<option value="${group.id}" ${selectedCalendar === group.id ? 'selected' : ''}>${group.name}</option>`).join('')}</select></label>
+        ${familyJoined ? `<fieldset class="event-participants-field" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>누가 가나요?</legend><div class="participant-options">${participantOptions}</div></fieldset>` : ''}
         <label class="event-form-field"><span>장소 <small>선택</small></span><input name="location" type="text" maxlength="120" placeholder="장소를 추가하세요" value="${escapeHtml(isEditing ? existingEvent.location || '' : '')}"></label>
         <label class="event-form-field"><span>설명</span><textarea name="notes" rows="3" maxlength="300" placeholder="메모를 남겨 보세요">${escapeHtml(isEditing ? existingEvent.notes || existingEvent.description || '' : '')}</textarea></label>
         <footer class="event-modal-footer">
@@ -411,13 +425,17 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   };
   updateAllDayFields();
   form.elements.allDay.addEventListener('change', updateAllDayFields);
+  form.elements.calendarId.addEventListener('change', () => {
+    const participantsField = form.querySelector('.event-participants-field');
+    if (participantsField) participantsField.hidden = form.elements.calendarId.value !== 'family';
+  });
   modal.addEventListener('click', (event) => {
     if (event.target === modal || event.target.closest('.event-modal-close, .event-cancel-button')) close();
   });
   document.addEventListener('keydown', handleEscape);
   requestAnimationFrame(() => titleInput.focus());
 
-  form.addEventListener('submit', (event) => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!form.reportValidity()) return;
     const data = new FormData(form);
@@ -444,35 +462,77 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
       location: String(data.get('location')).trim(),
       notes: String(data.get('notes')).trim()
     };
+    const toFamily = group.id === 'family';
+    if (toFamily) savedEvent.participants = data.getAll('participants').map(String);
+    if (isEditing && existingEvent.source === 'family' && existingEvent.place?.name === savedEvent.location) savedEvent.place = existingEvent.place;
     const conflict = findTimeConflict(savedEvent, isEditing ? existingEvent.id : null);
-    if (conflict) {
-      showToast(`다른 일정 '${conflict.title}'과 시간이 겹칩니다. 시간을 바꿔 주세요.`, 'info');
+    if (conflict && !confirm(`'${conflict.title}' 일정과 시간이 겹쳐요. 그래도 저장할까요?`)) return;
+
+    const saveButton = form.querySelector('.event-save-button');
+    saveButton.disabled = true;
+    try {
+      const wasFamily = isEditing && existingEvent.source === 'family';
+      const savedEvents = loadSavedEvents();
+      if (toFamily) {
+        if (isEditing && !wasFamily && !saveEvents(savedEvents.filter((item) => item.id !== existingEvent.id))) return;
+        try {
+          await family.saveEvent(savedEvent);
+        } catch (error) {
+          if (isEditing && !wasFamily) saveEvents(savedEvents);
+          throw error;
+        }
+      } else {
+        const updatedEvents = isEditing && !wasFamily
+          ? savedEvents.map((item) => item.id === existingEvent.id ? savedEvent : item)
+          : [...savedEvents, savedEvent];
+        if (!saveEvents(updatedEvents)) return;
+        if (wasFamily) {
+          try {
+            await family.deleteEvent(existingEvent.id);
+          } catch (error) {
+            saveEvents(savedEvents);
+            throw error;
+          }
+        }
+      }
+    } catch (error) {
+      showToast(error.message || '일정을 저장하지 못했습니다.', 'info');
       return;
+    } finally {
+      saveButton.disabled = false;
     }
-    const savedEvents = loadSavedEvents();
-    const updatedEvents = isEditing
-      ? savedEvents.map((item) => item.id === existingEvent.id ? savedEvent : item)
-      : [...savedEvents, savedEvent];
-    if (!saveEvents(updatedEvents)) return;
     const [year, month, day] = savedEvent.date.split('-').map(Number);
     displayedMonth = new Date(year, month - 1, 1);
     close();
     setSelectedDate(new Date(year, month - 1, day, 12));
-    showView('today');
-    showToast(isEditing ? '일정을 수정했습니다.' : '일정을 등록했습니다.', 'success');
+    if (document.querySelector('.view.active')?.id !== 'day-detail') showView('today');
+    showToast(toFamily ? '가족 일정에 저장했어요. 가족 모두에게 보여요.' : isEditing ? '일정을 수정했습니다.' : '일정을 등록했습니다.', 'success');
   });
 
-  modal.querySelector('.event-delete-button')?.addEventListener('click', () => {
-    const remaining = loadSavedEvents().filter((item) => item.id !== existingEvent.id);
-    if (!saveEvents(remaining)) return;
-    close();
-    setSelectedDate(selectedDate);
-    showToast('일정을 삭제했습니다.', 'success');
-  });
+  modal.querySelector('.event-delete-button')?.addEventListener('click', () => deleteEventWithConfirm(existingEvent, close));
+}
+
+// 일정 삭제는 실수로 누르기 쉬워 항상 한 번 더 묻는다. 가족 일정은 모두에게서 사라진다는 점을 알린다.
+async function deleteEventWithConfirm(item, onDone) {
+  const isFamily = item.source === 'family';
+  const message = isFamily
+    ? `'${item.title}' 일정을 삭제할까요?\n가족 모두의 캘린더에서 사라져요.`
+    : `'${item.title}' 일정을 삭제할까요?`;
+  if (!confirm(message)) return;
+  try {
+    if (isFamily) await window.MapDuleFamily.deleteEvent(item.id);
+    else if (!saveEvents(loadSavedEvents().filter((saved) => saved.id !== item.id))) return;
+  } catch (error) {
+    showToast(error.message || '일정을 삭제하지 못했습니다.', 'info');
+    return;
+  }
+  onDone?.();
+  setSelectedDate(selectedDate);
+  showToast('일정을 삭제했습니다.', 'success');
 }
 
 function eventsForDate(date) {
-  return loadSavedEvents()
+  return allEvents()
     .filter((item) => item.date === date && visibleCalendars.has(calendarIdForEvent(item)))
     .sort((first, second) => (first.allDay ? '' : first.startTime).localeCompare(second.allDay ? '' : second.startTime));
 }
@@ -480,7 +540,8 @@ function eventsForDate(date) {
 function renderCalendarSidebar() {
   const list = document.querySelector('.calendar-list');
   if (list) {
-    list.innerHTML = calendarGroups.map((group) => `
+    const familyJoined = Boolean(window.MapDuleFamily?.isJoined());
+    list.innerHTML = calendarGroups.filter((group) => group.id !== 'family' || familyJoined).map((group) => `
       <label class="calendar-list-item">
         <input type="checkbox" value="${group.id}" ${visibleCalendars.has(group.id) ? 'checked' : ''}>
         <span class="calendar-color-dot" style="--calendar-color:${group.color}"></span>
@@ -584,7 +645,7 @@ function renderDayView() {
 function renderAgendaView() {
   const monthStart = localDateString(new Date(displayedMonth.getFullYear(), displayedMonth.getMonth(), 1));
   const monthEnd = localDateString(new Date(displayedMonth.getFullYear(), displayedMonth.getMonth() + 1, 0));
-  const events = loadSavedEvents()
+  const events = allEvents()
     .filter((item) => item.date >= monthStart && item.date <= monthEnd && visibleCalendars.has(calendarIdForEvent(item)))
     .sort((first, second) => `${first.date}${first.allDay ? '' : first.startTime}`.localeCompare(`${second.date}${second.allDay ? '' : second.startTime}`));
   if (!events.length) return '<div class="agenda-empty">이번 달에 등록된 일정이 없습니다.</div>';
@@ -648,8 +709,49 @@ function navigateCalendar(offset) {
   setSelectedDate(date);
 }
 
-document.querySelector('.main-month-prev')?.addEventListener('click', () => navigateCalendar(-1));
-document.querySelector('.main-month-next')?.addEventListener('click', () => navigateCalendar(1));
+document.querySelector('.main-month-prev')?.addEventListener('click', () => navigateCalendarWithMotion(-1));
+document.querySelector('.main-month-next')?.addEventListener('click', () => navigateCalendarWithMotion(1));
+function navigateCalendarWithMotion(offset) {
+  const calendarContent = document.querySelector('.calendar-view-content');
+  calendarContent?.classList.remove('calendar-enter-next', 'calendar-enter-previous');
+  navigateCalendar(offset);
+  if (!calendarContent) return;
+  calendarContent.classList.add(offset > 0 ? 'calendar-enter-next' : 'calendar-enter-previous');
+}
+
+const calendarViewport = document.querySelector('.calendar-view-content');
+let calendarSwipeStart = null;
+let suppressCalendarClickUntil = 0;
+calendarViewport?.addEventListener('touchstart', (event) => {
+  if (event.touches.length !== 1 || event.target.closest('.week-view')) {
+    calendarSwipeStart = null;
+    return;
+  }
+  const touch = event.touches[0];
+  calendarSwipeStart = { x: touch.clientX, y: touch.clientY };
+}, { passive: true });
+
+document.addEventListener('touchend', (event) => {
+  if (!calendarSwipeStart) return;
+  const touch = event.changedTouches[0];
+  const deltaX = touch.clientX - calendarSwipeStart.x;
+  const deltaY = touch.clientY - calendarSwipeStart.y;
+  calendarSwipeStart = null;
+  if (Math.abs(deltaX) < 56 || Math.abs(deltaX) < Math.abs(deltaY) * 1.3) return;
+  suppressCalendarClickUntil = Date.now() + 400;
+  navigateCalendarWithMotion(deltaX < 0 ? 1 : -1);
+}, { passive: true });
+
+document.addEventListener('touchcancel', () => {
+  calendarSwipeStart = null;
+}, { passive: true });
+
+calendarViewport?.addEventListener('animationend', (event) => {
+  if (event.target === calendarViewport) {
+    calendarViewport.classList.remove('calendar-enter-next', 'calendar-enter-previous');
+  }
+});
+
 document.querySelector('.mini-month-prev')?.addEventListener('click', () => changeDisplayedMonth(-1));
 document.querySelector('.mini-month-next')?.addEventListener('click', () => changeDisplayedMonth(1));
 document.querySelector('.calendar-view-select')?.addEventListener('change', (event) => {
@@ -699,10 +801,15 @@ function openCalendarDate(date, createWhenEmpty = true) {
 }
 
 document.querySelector('.calendar-view-content')?.addEventListener('click', (event) => {
+  if (Date.now() < suppressCalendarClickUntil) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   const eventBadge = event.target.closest('[data-edit-event]');
   if (eventBadge) {
     event.stopPropagation();
-    const item = loadSavedEvents().find((saved) => saved.id === eventBadge.dataset.editEvent);
+    const item = allEvents().find((saved) => saved.id === eventBadge.dataset.editEvent);
     if (item) openEventFormModal('edit', item);
     return;
   }
@@ -724,7 +831,7 @@ document.querySelector('.calendar-view-content')?.addEventListener('click', (eve
 document.querySelector('.mobile-selected-day')?.addEventListener('click', (event) => {
   const badge = event.target.closest('[data-edit-event]');
   if (badge) {
-    const item = loadSavedEvents().find((saved) => saved.id === badge.dataset.editEvent);
+    const item = allEvents().find((saved) => saved.id === badge.dataset.editEvent);
     if (item) openEventFormModal('edit', item);
     return;
   }
@@ -756,6 +863,11 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     return Array.isArray(events) ? events : [];
   }
 
+  // 이 기기에 저장한 내 일정 + 가족 공유 일정
+  function allEvents() {
+    return [...loadSavedEvents(), ...(window.MapDuleFamily?.events() || [])];
+  }
+
   function saveEvents(events) {
     try {
       localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(events));
@@ -766,11 +878,24 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     }
   }
 
-  function findTimeConflict(candidate, ignoredId = null) {
-    return loadSavedEvents().find((item) => item.id !== ignoredId
+  function involvesMe(item) {
+    if (item.source !== 'family' && item.calendarId !== 'family') return true;
+    const me = window.MapDuleFamily?.me();
+    return !item.participants?.length || !me || item.participants.includes(me);
+  }
+
+  function findTimeConflictIn(list, candidate, ignoredId = null) {
+    if (candidate.allDay || !involvesMe(candidate)) return null;
+    return list.find((item) => item.id !== ignoredId
+      && !item.allDay
+      && involvesMe(item)
       && item.date === candidate.date
       && candidate.startTime < item.endTime
-      && candidate.endTime > item.startTime);
+      && candidate.endTime > item.startTime) || null;
+  }
+
+  function findTimeConflict(candidate, ignoredId = null) {
+    return findTimeConflictIn(allEvents(), candidate, ignoredId);
   }
 
   function downloadFile(filename, content, contentType) {
@@ -801,9 +926,9 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     const timeline = document.querySelector('.timeline');
     if (!timeline) return;
     const date = localDateString(selectedDate);
-    const events = loadSavedEvents()
+    const events = allEvents()
       .filter((item) => item.date === date && visibleCalendars.has(calendarIdForEvent(item)))
-      .sort((first, second) => first.startTime.localeCompare(second.startTime));
+      .sort((first, second) => (first.allDay ? '' : first.startTime).localeCompare(second.allDay ? '' : second.startTime));
 
     if (!events.length) {
       timeline.innerHTML = `
@@ -817,24 +942,29 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
       return;
     }
 
-    timeline.innerHTML = events.map((item) => `
+    timeline.innerHTML = events.map((item) => {
+      const group = calendarGroups.find((candidate) => candidate.id === calendarIdForEvent(item)) || calendarGroups[0];
+      return `
       <article class="timeline-row saved-event">
-        <div class="time-node"><b><span class="material-symbols-rounded">event</span></b><time>${escapeHtml(item.startTime)}</time></div>
+        <div class="time-node"><b style="--calendar-color:${group.color}"><span class="material-symbols-rounded">${item.source === 'family' ? 'family_restroom' : 'event'}</span></b><time>${item.allDay ? '종일' : escapeHtml(item.startTime)}</time></div>
         <div class="event-card panel">
-          <div class="card-meta"><span class="tag indigo">${escapeHtml(item.category)}</span><div class="event-actions"><button class="event-edit" type="button" data-edit-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 수정"><span class="material-symbols-rounded">edit</span></button><button class="event-delete" type="button" data-delete-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 삭제"><span class="material-symbols-rounded">delete</span></button></div></div>
+          <div class="card-meta"><span class="tag calendar-tag" style="--calendar-color:${group.color}">${escapeHtml(group.name)}</span><div class="event-actions"><button class="event-edit" type="button" data-edit-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 수정"><span class="material-symbols-rounded">edit</span></button><button class="event-delete" type="button" data-delete-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 삭제"><span class="material-symbols-rounded">delete</span></button></div></div>
           <h2>${escapeHtml(item.title)}</h2>
           <p class="event-time"><span class="material-symbols-rounded">schedule</span>${item.allDay ? '종일' : `${escapeHtml(item.startTime)} - ${escapeHtml(item.endTime)}`}</p>
           ${item.location ? `<p><span class="material-symbols-rounded">location_on</span>${escapeHtml(item.location)}</p>` : ''}
           ${item.notes ? `<p class="event-notes">${escapeHtml(item.notes)}</p>` : ''}
+          ${window.MapDuleFamily?.eventExtrasHtml(item) || ''}
         </div>
       </article>
-    `).join('');
+    `;
+    }).join('');
+    window.MapDuleFamily?.updateDayMap();
   }
 
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-event]');
     if (editButton) {
-      const existing = loadSavedEvents().find((item) => item.id === editButton.dataset.editEvent);
+      const existing = allEvents().find((item) => item.id === editButton.dataset.editEvent);
       if (!existing) return;
       openEventFormModal('edit', existing);
       return;
@@ -842,16 +972,8 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
     const deleteButton = event.target.closest('[data-delete-event]');
     if (!deleteButton) return;
-    const eventId = deleteButton.dataset.deleteEvent;
-    const remainingEvents = loadSavedEvents().filter((item) => item.id !== eventId);
-    try {
-      if (!saveEvents(remainingEvents)) return;
-    } catch {
-      showToast('일정을 삭제하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'info');
-      return;
-    }
-    setSelectedDate(selectedDate);
-    showToast('일정을 삭제했습니다.');
+    const item = allEvents().find((saved) => saved.id === deleteButton.dataset.deleteEvent);
+    if (item) deleteEventWithConfirm(item);
   });
 
   const manualEventForm = document.querySelector('#manual-event-form');
@@ -895,10 +1017,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     };
 
     const conflict = findTimeConflict(newEvent, editingEventId);
-    if (conflict) {
-      showToast(`다른 일정 '${conflict.title}'과 시간이 겹칩니다. 시간을 바꿔 주세요.`, 'info');
-      return;
-    }
+    if (conflict && !confirm(`'${conflict.title}' 일정과 시간이 겹쳐요. 그래도 저장할까요?`)) return;
 
     const events = loadSavedEvents();
     const updatedEvents = editingEventId
@@ -920,7 +1039,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
   setSelectedDate(selectedDate);
 
   document.querySelector('#export-ics').addEventListener('click', () => {
-    const events = loadSavedEvents().sort((first, second) => `${first.date}${first.startTime}`.localeCompare(`${second.date}${second.startTime}`));
+    const events = allEvents().sort((first, second) => `${first.date}${first.startTime}`.localeCompare(`${second.date}${second.startTime}`));
     if (!events.length) {
       showToast('내보낼 일정이 없습니다.');
       return;
@@ -937,8 +1056,9 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
         'BEGIN:VEVENT',
         `UID:${escapeICSText(item.id)}@mapdule.local`,
         `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`,
-        `DTSTART;TZID=Asia/Seoul:${toICSDate(item.date, item.startTime)}`,
-        `DTEND;TZID=Asia/Seoul:${toICSDate(item.date, item.endTime)}`,
+        ...(item.allDay
+          ? [`DTSTART;VALUE=DATE:${item.date.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${localDateString(new Date(new Date(`${item.date}T12:00:00`).getTime() + 86400000)).replace(/-/g, '')}`]
+          : [`DTSTART;TZID=Asia/Seoul:${toICSDate(item.date, item.startTime)}`, `DTEND;TZID=Asia/Seoul:${toICSDate(item.date, item.endTime)}`]),
         `SUMMARY:${escapeICSText(item.title)}`
       );
       if (item.location) lines.push(`LOCATION:${escapeICSText(item.location)}`);
@@ -1019,11 +1139,20 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     });
   });
 
-  document.querySelector('.sync-button')?.addEventListener('click', (event) => {
+  document.querySelector('.sync-button')?.addEventListener('click', async (event) => {
   const button = event.currentTarget;
-  button.innerHTML = '<span class="material-symbols-rounded">check</span>동기화 완료';
+  if (!window.MapDuleFamily?.isJoined()) {
+    showToast('가족에 참여하면 가족 일정과 이동 상황을 새로 받아올 수 있어요.', 'info');
+    showView('family');
+    return;
+  }
+  button.disabled = true;
+  button.innerHTML = '<span class="material-symbols-rounded">sync</span>받아오는 중';
+  const result = await window.MapDuleFamily.refresh({ quiet: false });
+  button.disabled = false;
+  button.innerHTML = `<span class="material-symbols-rounded">${result ? 'check' : 'sync_problem'}</span>${result ? '새로고침 완료' : '연결 실패'}`;
   setTimeout(() => {
-    button.innerHTML = '<span class="material-symbols-rounded">my_location</span>실시간 동기화';
+    button.innerHTML = '<span class="material-symbols-rounded">sync</span>가족 새로고침';
   }, 1800);
 });
 
@@ -1080,9 +1209,44 @@ async function refreshAzureOpenAiStatus() {
     const response = await fetch('/api/ai/status');
     const status = await response.json();
     if (!response.ok) throw new Error(status.error || 'AI 설정 상태를 확인하지 못했습니다.');
-    badge.textContent = status.configured ? 'Azure OpenAI 준비됨' : '서버 설정 필요';
-    badge.className = `tag ${status.configured ? 'mint' : 'slate'}`;
-    if (!status.configured) setAiAnalysisMessage('Azure OpenAI 서버 설정이 필요합니다. 로컬은 .env, 배포 사이트는 Azure Static Web Apps의 애플리케이션 설정에 endpoint, API key, deployment를 등록해 주세요.');
+    if (!status.configured) {
+      badge.textContent = '서버 설정 필요';
+      badge.className = 'tag slate';
+      setAiAnalysisMessage('Azure OpenAI 서버 설정이 필요합니다. 로컬은 .env, 배포 사이트는 Azure Static Web Apps의 애플리케이션 설정에 endpoint, API key, deployment를 등록해 주세요.');
+      return;
+    }
+
+    if (status.authRequired) {
+      let identity = null;
+      try {
+        const identityResponse = await fetch('/.auth/me');
+        if (identityResponse.ok) identity = await identityResponse.json();
+      } catch {
+        identity = null;
+      }
+      const authenticated = identity?.clientPrincipal?.userRoles?.includes('authenticated');
+      if (!authenticated) {
+        badge.textContent = '로그인 필요';
+        badge.className = 'tag slate';
+        const message = document.querySelector('#ai-analysis-message');
+        setAiAnalysisMessage('AI 일정 분석은 로그인한 사용자만 사용할 수 있습니다.');
+        const signInLink = document.createElement('a');
+        signInLink.href = '/.auth/login/aad?post_login_redirect_uri=%2F';
+        signInLink.textContent = '로그인';
+        message?.append(' ', signInLink);
+        return;
+      }
+
+      const message = document.querySelector('#ai-analysis-message');
+      setAiAnalysisMessage('로그인 상태입니다.');
+      const signOutLink = document.createElement('a');
+      signOutLink.href = '/.auth/logout?post_logout_redirect_uri=%2F';
+      signOutLink.textContent = '로그아웃';
+      message?.append(' ', signOutLink);
+    }
+
+    badge.textContent = 'Azure OpenAI 준비됨';
+    badge.className = 'tag mint';
   } catch (error) {
     badge.textContent = 'AI 서버 연결 안 됨';
     badge.className = 'tag coral';
@@ -1105,7 +1269,7 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
   const originalLabel = button.innerHTML;
   button.disabled = true;
   button.innerHTML = '<span class="material-symbols-rounded">progress_activity</span>일정 분석 중';
-  setAiAnalysisMessage('Azure OpenAI가 문장에서 일정을 찾고 있습니다.');
+  setAiAnalysisMessage('AI가 문장에서 일정을 찾고 있습니다.');
   analyzedScheduleEvents = [];
   const registerButton = document.querySelector('#ai .primary-cta');
   registerButton.disabled = true;
@@ -1168,13 +1332,8 @@ document.querySelector('#ai .primary-cta')?.addEventListener('click', () => {
   }));
   const staged = [];
   for (const item of newEvents) {
-    const conflict = [...savedEvents, ...staged].find((existing) => existing.date === item.date
-      && item.startTime < existing.endTime
-      && item.endTime > existing.startTime);
-    if (conflict) {
-      showToast(`'${item.title}' 일정이 '${conflict.title}' 일정과 겹칩니다. 시간을 조정해 주세요.`, 'info');
-      return;
-    }
+    const conflict = findTimeConflictIn([...allEvents(), ...staged], item);
+    if (conflict && !confirm(`'${item.title}' 일정이 '${conflict.title}' 일정과 겹쳐요. 그래도 등록할까요?`)) return;
     staged.push(item);
   }
   if (!saveEvents([...savedEvents, ...newEvents])) return;
