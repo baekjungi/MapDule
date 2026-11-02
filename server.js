@@ -10,7 +10,7 @@ const MAX_REQUEST_BYTES = 16 * 1024;
 const localFamilyDataFile = path.join(root, '.mapdule-data', 'family-dev.json');
 const publicFiles = new Set(['index.html', 'app.js', 'styles.css', 'family.js', 'family.css']);
 const securityHeaders = {
-  'Content-Security-Policy': "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net https://t1.kakaocdn.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.kakao.com https://*.daumcdn.net",
+  'Content-Security-Policy': "upgrade-insecure-requests; default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net https://t1.kakaocdn.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.kakao.com https://*.daumcdn.net",
   'Permissions-Policy': 'geolocation=(self), camera=(), microphone=()',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Content-Type-Options': 'nosniff',

@@ -19,8 +19,13 @@ test('Azure Static Web Apps protects AI parsing with authentication', () => {
   const parseRoute = config.routes.find((route) => route.route === '/api/ai/parse');
 
   assert.deepEqual(parseRoute?.allowedRoles, ['authenticated']);
+  assert.match(config.globalHeaders['Content-Security-Policy'], /upgrade-insecure-requests/);
   assert.deepEqual(
     JSON.parse(fs.readFileSync(path.join(projectRoot, 'dist', 'staticwebapp.config.json'), 'utf8')).routes,
     config.routes
   );
+
+  const vercelConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'vercel.json'), 'utf8'));
+  const vercelCsp = vercelConfig.headers[0].headers.find((header) => header.key === 'Content-Security-Policy');
+  assert.match(vercelCsp?.value || '', /upgrade-insecure-requests/);
 });

@@ -373,6 +373,17 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   const family = window.MapDuleFamily;
   const familyJoined = Boolean(family?.isJoined());
   const selectedCalendar = isEditing ? calendarIdForEvent(existingEvent) : 'personal';
+  const todayDate = localDateString(new Date());
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowDate = localDateString(tomorrow);
+  const now = new Date();
+  const roundedNow = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 15) * 15;
+  const defaultStartMinutes = initialDate === todayDate ? Math.min(roundedNow, 23 * 60) : 9 * 60;
+  const formatTime = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  const initialStartTime = isEditing ? existingEvent.startTime || '09:00' : formatTime(defaultStartMinutes);
+  const initialEndTime = isEditing ? existingEvent.endTime || '10:00' : formatTime(Math.min(defaultStartMinutes + 60, 23 * 60 + 59));
+  let selectedPlace = isEditing && existingEvent.place ? { ...existingEvent.place } : null;
   const selectableCalendars = calendarGroups.filter((group) => group.id !== 'family' || familyJoined || selectedCalendar === 'family');
   const participantIds = new Set(isEditing && existingEvent.participants ? existingEvent.participants : [family?.me()].filter(Boolean));
   const participantOptions = familyJoined
@@ -388,16 +399,17 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
       </header>
       <form class="event-modal-form">
         <label class="event-form-field event-title-field"><span>제목</span><input name="title" type="text" maxlength="80" placeholder="일정 제목을 입력하세요" value="${escapeHtml(isEditing ? existingEvent.title : '')}" required autofocus></label>
-        <label class="event-form-field"><span>날짜</span><input name="date" type="date" value="${escapeHtml(isEditing ? existingEvent.date : initialDate)}" required></label>
+        <div class="event-form-field event-date-field"><label for="event-date-input"><span>날짜</span></label><input id="event-date-input" name="date" type="date" value="${escapeHtml(isEditing ? existingEvent.date : initialDate)}" required><span class="event-date-shortcuts"><button type="button" data-event-date="${todayDate}">오늘</button><button type="button" data-event-date="${tomorrowDate}">내일</button></span></div>
         <label class="event-all-day-field"><input name="allDay" type="checkbox" ${isEditing && existingEvent.allDay ? 'checked' : ''}><span class="event-checkmark"></span><span>종일</span></label>
         <div class="event-time-fields">
-          <label class="event-form-field"><span>시작</span><input name="startTime" type="time" value="${escapeHtml(isEditing ? existingEvent.startTime || '09:00' : '09:00')}"></label>
+          <div class="event-duration-presets" role="group" aria-label="일정 길이 빠른 설정"><span>일정 길이</span><button type="button" data-event-duration="30" aria-pressed="false">30분</button><button type="button" data-event-duration="60" aria-pressed="false">1시간</button><button type="button" data-event-duration="120" aria-pressed="false">2시간</button></div>
+          <label class="event-form-field"><span>시작</span><input name="startTime" type="time" value="${escapeHtml(initialStartTime)}"></label>
           <span class="event-time-separator">—</span>
-          <label class="event-form-field"><span>종료</span><input name="endTime" type="time" value="${escapeHtml(isEditing ? existingEvent.endTime || '10:00' : '10:00')}"></label>
+          <label class="event-form-field"><span>종료</span><input name="endTime" type="time" value="${escapeHtml(initialEndTime)}"></label>
         </div>
         <label class="event-form-field"><span>캘린더</span><select name="calendarId">${selectableCalendars.map((group) => `<option value="${group.id}" ${selectedCalendar === group.id ? 'selected' : ''}>${group.name}</option>`).join('')}</select></label>
         ${familyJoined ? `<fieldset class="event-participants-field" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>누가 가나요?</legend><div class="participant-options">${participantOptions}</div></fieldset>` : ''}
-        <label class="event-form-field"><span>장소 <small>선택</small></span><input name="location" type="text" maxlength="120" placeholder="장소를 추가하세요" value="${escapeHtml(isEditing ? existingEvent.location || '' : '')}"></label>
+        <div class="event-form-field event-location-field"><label for="event-location-input"><span>장소 <small>선택</small></span></label><div class="event-location-input-row"><input id="event-location-input" name="location" type="text" maxlength="120" placeholder="장소명이나 도로명 주소" value="${escapeHtml(isEditing ? existingEvent.location || '' : '')}"><button class="event-location-search" type="button" aria-label="장소 검색" title="지도에서 장소 검색"><span class="material-symbols-rounded">search</span></button></div><p class="event-location-status" aria-live="polite">${selectedPlace ? `선택한 위치 · ${escapeHtml(selectedPlace.name)}${selectedPlace.address ? ` · ${escapeHtml(selectedPlace.address)}` : ''}` : '검색 결과를 확인해 정확한 장소를 선택하세요.'}</p><div class="event-place-results" hidden></div></div>
         <label class="event-form-field"><span>설명</span><textarea name="notes" rows="3" maxlength="300" placeholder="메모를 남겨 보세요">${escapeHtml(isEditing ? existingEvent.notes || existingEvent.description || '' : '')}</textarea></label>
         <footer class="event-modal-footer">
           ${isEditing ? '<button class="event-delete-button" type="button"><span class="material-symbols-rounded">delete</span>삭제</button>' : '<span></span>'}
@@ -410,6 +422,12 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   const form = modal.querySelector('.event-modal-form');
   const titleInput = form.elements.title;
   const timeFields = [...form.querySelectorAll('[name="startTime"], [name="endTime"]')];
+  const locationInput = form.elements.location;
+  const locationStatus = form.querySelector('.event-location-status');
+  const placeResults = form.querySelector('.event-place-results');
+  const placeSearchButton = form.querySelector('.event-location-search');
+  let placeCandidates = [];
+  let placeSearchId = 0;
   const close = () => {
     modal.remove();
     document.removeEventListener('keydown', handleEscape);
@@ -422,9 +440,83 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
       input.disabled = form.elements.allDay.checked;
       input.required = !form.elements.allDay.checked;
     });
+    updateDurationControls();
+  };
+  const updateDurationControls = () => {
+    if (!form.elements.startTime || !form.elements.endTime) return;
+    const [hours, minutes] = form.elements.startTime.value.split(':').map(Number);
+    const startMinutes = hours * 60 + minutes;
+    const duration = form.elements.endTime.value.split(':').map(Number);
+    const currentDuration = duration[0] * 60 + duration[1] - startMinutes;
+    form.querySelectorAll('[data-event-duration]').forEach((button) => {
+      const minutesToAdd = Number(button.dataset.eventDuration);
+      const active = currentDuration === minutesToAdd;
+      button.disabled = form.elements.allDay.checked || startMinutes + minutesToAdd > 23 * 60 + 59;
+      button.setAttribute('aria-pressed', String(active));
+    });
   };
   updateAllDayFields();
   form.elements.allDay.addEventListener('change', updateAllDayFields);
+  form.elements.startTime.addEventListener('input', updateDurationControls);
+  form.elements.endTime.addEventListener('input', updateDurationControls);
+  form.querySelectorAll('[data-event-duration]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const [hours, minutes] = form.elements.startTime.value.split(':').map(Number);
+      const endMinutes = hours * 60 + minutes + Number(button.dataset.eventDuration);
+      if (endMinutes > 23 * 60 + 59) return;
+      form.elements.endTime.value = formatTime(endMinutes);
+      form.elements.endTime.setCustomValidity('');
+      updateDurationControls();
+    });
+  });
+  form.querySelectorAll('[data-event-date]').forEach((button) => {
+    button.addEventListener('click', () => {
+      form.elements.date.value = button.dataset.eventDate;
+      form.elements.date.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+  placeSearchButton.addEventListener('click', async () => {
+    const query = locationInput.value.trim();
+    if (!query) {
+      locationStatus.textContent = '장소명이나 주소를 먼저 입력해 주세요.';
+      locationInput.focus();
+      return;
+    }
+    const requestId = ++placeSearchId;
+    placeSearchButton.disabled = true;
+    locationStatus.textContent = '지도에서 장소를 찾고 있어요.';
+    placeResults.hidden = true;
+    try {
+      placeCandidates = await family?.searchPlaces?.(query) || [];
+      if (requestId !== placeSearchId) return;
+      if (!placeCandidates.length) {
+        locationStatus.textContent = '검색 결과가 없어요. 장소명이나 도로명 주소를 바꿔 검색해 주세요.';
+        return;
+      }
+      placeResults.innerHTML = placeCandidates.map((place, index) => `<button type="button" class="event-place-option" data-place-index="${index}"><b>${escapeHtml(place.name)}</b><small>${escapeHtml(place.address || `${place.lat.toFixed(5)}, ${place.lng.toFixed(5)}`)}</small></button>`).join('');
+      placeResults.hidden = false;
+      locationStatus.textContent = '목록에서 지도 위치가 맞는 장소를 선택하세요.';
+    } catch {
+      locationStatus.textContent = '장소를 검색하지 못했어요. 인터넷 연결을 확인해 주세요.';
+    } finally {
+      if (requestId === placeSearchId) placeSearchButton.disabled = false;
+    }
+  });
+  placeResults.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-place-index]');
+    if (!option) return;
+    selectedPlace = placeCandidates[Number(option.dataset.placeIndex)];
+    locationInput.value = selectedPlace.name;
+    locationStatus.textContent = `선택한 위치 · ${selectedPlace.name}${selectedPlace.address ? ` · ${selectedPlace.address}` : ''} (${selectedPlace.lat.toFixed(5)}, ${selectedPlace.lng.toFixed(5)})`;
+    placeResults.hidden = true;
+  });
+  locationInput.addEventListener('input', () => {
+    placeSearchId += 1;
+    placeCandidates = [];
+    placeResults.hidden = true;
+    if (selectedPlace && locationInput.value.trim() !== selectedPlace.name) selectedPlace = null;
+    if (!selectedPlace) locationStatus.textContent = locationInput.value.trim() ? '장소를 검색해 정확한 위치를 선택하세요.' : '장소는 선택사항입니다.';
+  });
   form.elements.calendarId.addEventListener('change', () => {
     const participantsField = form.querySelector('.event-participants-field');
     if (participantsField) participantsField.hidden = form.elements.calendarId.value !== 'family';
@@ -462,9 +554,10 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
       location: String(data.get('location')).trim(),
       notes: String(data.get('notes')).trim()
     };
+    if (savedEvent.location && selectedPlace) savedEvent.place = { ...selectedPlace, name: savedEvent.location };
     const toFamily = group.id === 'family';
     if (toFamily) savedEvent.participants = data.getAll('participants').map(String);
-    if (isEditing && existingEvent.source === 'family' && existingEvent.place?.name === savedEvent.location) savedEvent.place = existingEvent.place;
+    if (!savedEvent.place && isEditing && existingEvent.place?.name === savedEvent.location) savedEvent.place = existingEvent.place;
     const conflict = findTimeConflict(savedEvent, isEditing ? existingEvent.id : null);
     if (conflict && !confirm(`'${conflict.title}' 일정과 시간이 겹쳐요. 그래도 저장할까요?`)) return;
 
@@ -572,10 +665,18 @@ function renderCalendarSidebar() {
   }).join('');
 }
 
+function eventHasEnded(item) {
+  if (!item?.date) return false;
+  const endTime = item.allDay ? '23:59:59' : `${item.endTime || '23:59'}:00`;
+  const end = new Date(`${item.date}T${endTime}`);
+  return Number.isFinite(end.valueOf()) && end <= new Date();
+}
+
 function renderEventBadge(item, compact = false) {
   const group = calendarGroups.find((candidate) => candidate.id === calendarIdForEvent(item));
   const time = item.allDay ? '종일' : item.startTime;
-  return `<button type="button" class="event-badge${compact ? ' compact' : ''}" style="--calendar-color:${group.color}" data-edit-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 수정">
+  const classes = ['event-badge', compact ? 'compact' : '', eventHasEnded(item) ? 'is-ended' : ''].filter(Boolean).join(' ');
+  return `<button type="button" class="${classes}" style="--calendar-color:${group.color}" data-edit-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 수정">
     ${compact ? '' : `<span class="event-badge-time">${escapeHtml(time)}</span>`}<span class="event-badge-title">${escapeHtml(item.title)}</span>
   </button>`;
 }
@@ -944,12 +1045,13 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
     timeline.innerHTML = events.map((item) => {
       const group = calendarGroups.find((candidate) => candidate.id === calendarIdForEvent(item)) || calendarGroups[0];
+      const ended = eventHasEnded(item);
       return `
-      <article class="timeline-row saved-event">
+      <article class="timeline-row saved-event ${ended ? 'is-ended' : ''}">
         <div class="time-node"><b style="--calendar-color:${group.color}"><span class="material-symbols-rounded">${item.source === 'family' ? 'family_restroom' : 'event'}</span></b><time>${item.allDay ? '종일' : escapeHtml(item.startTime)}</time></div>
         <div class="event-card panel">
           <div class="card-meta"><span class="tag calendar-tag" style="--calendar-color:${group.color}">${escapeHtml(group.name)}</span><div class="event-actions"><button class="event-edit" type="button" data-edit-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 수정"><span class="material-symbols-rounded">edit</span></button><button class="event-delete" type="button" data-delete-event="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)} 일정 삭제"><span class="material-symbols-rounded">delete</span></button></div></div>
-          <h2>${escapeHtml(item.title)}</h2>
+          <h2 class="${ended ? 'event-title-ended' : ''}">${escapeHtml(item.title)}</h2>
           <p class="event-time"><span class="material-symbols-rounded">schedule</span>${item.allDay ? '종일' : `${escapeHtml(item.startTime)} - ${escapeHtml(item.endTime)}`}</p>
           ${item.location ? `<p><span class="material-symbols-rounded">location_on</span>${escapeHtml(item.location)}</p>` : ''}
           ${item.notes ? `<p class="event-notes">${escapeHtml(item.notes)}</p>` : ''}
@@ -1359,3 +1461,9 @@ document.querySelector('#midpoint .primary-cta')?.addEventListener('click', () =
 });
 
 document.querySelector('.secondary-cta')?.addEventListener('click', () => showToast('중간지점을 먼저 계산해 주세요.'));
+
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  renderMonthCalendar();
+  if (document.querySelector('.view.active')?.id === 'day-detail') renderCalendar();
+}, 60000);

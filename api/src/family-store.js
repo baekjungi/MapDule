@@ -45,12 +45,14 @@ function createFileStore(filePath) {
   } catch {
     initialEntries = [];
   }
+  if (process.platform !== 'win32' && fs.existsSync(filePath)) fs.chmodSync(filePath, 0o600);
   let timer = null;
   const store = createMemoryStore(initialEntries, (entries) => {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, JSON.stringify([...entries]), 'utf8');
+      fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(filePath, JSON.stringify([...entries]), { encoding: 'utf8', mode: 0o600 });
+      if (process.platform !== 'win32') fs.chmodSync(filePath, 0o600);
     }, 200);
   });
   return { ...store, kind: 'file' };

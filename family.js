@@ -8,16 +8,20 @@
   const STATE_CACHE_KEY = 'mapdule-family-state';
   const ACTIVE_TRIP_KEY = 'mapdule-active-trip';
   const ACTIVITY_KEY = 'mapdule-family-activity';
+  const COMPLETED_KEY = 'mapdule-family-completed';
   const GEOCODE_CACHE_KEY = 'mapdule-geocode-cache';
-  const POLL_FAST_MS = 15000;
-  const POLL_SLOW_MS = 60000;
+  const POLL_INTERVAL_MS = 60000;
   const SEND_INTERVAL_MS = 20000;
+  const HEARTBEAT_MS = 60000;
+  const MAX_TRACKING_ACCURACY_METERS = 100;
+  const MAX_LOCATION_SPEED_METERS_PER_SECOND = 60;
   const MIN_MOVE_METERS = 25;
   const STALE_LOCATION_MS = 5 * 60 * 1000;
   // [처음 10km 속도, 그 이후 속도] — 시내 구간은 느리고 장거리는 고속버스·고속도로 속도에 가깝다.
-  const SPEED_KMH = { walk: [4.5, 4.5], transit: [20, 55], car: [25, 75] };
+  const SPEED_KMH = { walk: [4.5, 4.5], transit: [20, 70], car: [25, 85] };
   const MODE_LABELS = { walk: '도보', transit: '대중교통', car: '자동차' };
   const MODE_ICONS = { walk: 'directions_walk', transit: 'directions_subway', car: 'directions_car' };
+  const ACTIVITY_ICONS = { departed: 'near_me', arrived: 'where_to_vote', completed: 'task_alt', dayDone: 'celebration' };
 
   let credential = readText(CREDENTIAL_KEY);
   let state = credential ? readJson(STATE_CACHE_KEY, null) : null;
@@ -85,6 +89,11 @@
     return `${Math.floor(hours / 24)}일 전`;
   }
 
+  function formatDistance(meters) {
+    if (meters < 1000) return `${Math.max(1, Math.round(meters))}m`;
+    return `${(meters / 1000).toFixed(meters < 10000 ? 1 : 0)}km`;
+  }
+
   function eventStart(event) {
     if (!event || event.allDay) return null;
     return new Date(`${event.date}T${event.startTime}:00`);
@@ -99,10 +108,10 @@
   function estimateTrip(trip) {
     const last = trip.points?.at(-1);
     if (!last || !trip.destination) return null;
-    const meters = distanceMeters(last, trip.destination) * 1.3;
+    const meters = distanceMeters(last, trip.destination);
     const [citySpeed, longSpeed] = SPEED_KMH[trip.mode] || SPEED_KMH.transit;
     const km = meters / 1000;
-    const hours = Math.min(km, 10) / citySpeed + Math.max(km - 10, 0) / longSpeed;
+    const hours = Math.min(km, 10) * 1.3 / citySpeed + Math.max(km - 10, 0) * 1.15 / longSpeed;
     const minutes = Math.max(1, Math.round(hours * 60 + (trip.mode === 'transit' && meters > 1500 ? 5 : 0)));
     const arrival = new Date(Date.now() + minutes * 60000);
     const linkedEvent = trip.eventId ? familyEvents().find((event) => event.id === trip.eventId) : null;
@@ -195,6 +204,8 @@
     state = null;
     writeJson(STATE_CACHE_KEY, null);
     writeJson(ACTIVE_TRIP_KEY, null);
+    writeJson(ACTIVITY_KEY, null);
+    writeJson(COMPLETED_KEY, null);
     if (callServer && previous) {
       fetch('/api/family/leave', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-mapdule-member': previous }, body: '{}' }).catch(() => {});
     }
@@ -208,7 +219,7 @@
     const activity = [...entries, ...readJson(ACTIVITY_KEY, [])].slice(0, 30);
     writeJson(ACTIVITY_KEY, activity);
     for (const entry of entries) {
-      showToast(entry.text, entry.type === 'arrived' ? 'success' : 'info');
+      showToast(entry.text, entry.type === 'departed' ? 'info' : 'success');
       if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
         try {
           new Notification('MapDule 가족', { body: entry.text, tag: `${entry.memberId}-${entry.type}` });
@@ -227,7 +238,7 @@
       if (trip.memberId === state?.me) continue;
       const name = nextMembers.find((member) => member.id === trip.memberId)?.name || '가족';
       const previous = before.get(trip.memberId);
-      const place = trip.destination?.name ? ` → ${trip.destination.name}` : '';
+      const place = trip.destination?.name && trip.destination.name !== trip.title ? ` → ${trip.destination.name}` : '';
       if ((!previous || previous.id !== trip.id) && trip.status === 'moving') {
         entries.push({ type: 'departed', memberId: trip.memberId, at: trip.startedAt, text: `${name}님이 출발했어요 · ${trip.title}${place}` });
       }
@@ -236,6 +247,62 @@
       }
     }
     return entries;
+  }
+
+  function eventProgress(event) {
+    if (event.source !== 'family') return [];
+    const ids = event.participants?.length ? event.participants : Object.keys(event.arrivals || {});
+    const end = eventEnd(event);
+    const now = new Date();
+    return ids.map((id) => {
+      const member = memberById(id);
+      if (!member) return null;
+      const arrivedAt = event.arrivals?.[id] || null;
+      const trip = trips().find((item) => item.memberId === id && item.eventId === event.id);
+      let status = 'waiting';
+      if (arrivedAt && end && now >= end) status = 'done';
+      else if (arrivedAt) status = 'arrived';
+      else if (trip?.status === 'moving') status = 'moving';
+      else if (end && now >= end) status = 'nodata';
+      return { member, status, arrivedAt };
+    }).filter(Boolean);
+  }
+
+  function checkCompletions() {
+    if (!isJoined()) return;
+    const saved = readJson(COMPLETED_KEY, []);
+    const notified = new Set(Array.isArray(saved) ? saved : []);
+    const today = localDateString(new Date());
+    const oldest = Date.now() - 12 * 60 * 60 * 1000;
+    const finished = [];
+    for (const event of familyEvents()) {
+      const end = eventEnd(event);
+      if (!end || end.getTime() < oldest || end > new Date()) continue;
+      for (const progress of eventProgress(event)) {
+        const key = `${event.id}:${progress.member.id}`;
+        if (progress.status !== 'done' || progress.member.id === me() || notified.has(key)) continue;
+        notified.add(key);
+        finished.push({
+          type: 'completed',
+          memberId: progress.member.id,
+          at: end.toISOString(),
+          text: `${progress.member.name}님이 ${event.title} 일정을 마쳤어요 · ${formatClock(progress.arrivedAt)} 도착, ${event.endTime} 끝`
+        });
+      }
+    }
+    const dayDone = [];
+    const todays = familyEvents().filter((event) => event.date === today && !event.allDay);
+    for (const member of members()) {
+      const key = `day:${today}:${member.id}`;
+      const theirs = todays.filter((event) => event.participants?.includes(member.id));
+      if (member.id === me() || !theirs.length || notified.has(key)) continue;
+      const allDone = theirs.every((event) => eventProgress(event).find((item) => item.member.id === member.id)?.status === 'done');
+      if (!allDone) continue;
+      notified.add(key);
+      dayDone.push({ type: 'dayDone', memberId: member.id, at: new Date().toISOString(), text: `${member.name}님이 오늘 일정 ${theirs.length}개를 모두 마쳤어요` });
+    }
+    writeJson(COMPLETED_KEY, [...notified].slice(-300));
+    recordActivity([...dayDone, ...finished]);
   }
 
   async function refresh({ quiet = true } = {}) {
@@ -252,6 +319,7 @@
         writeJson(STATE_CACHE_KEY, state);
         recordActivity(changes);
         syncTrackingWithServer();
+        checkCompletions();
         afterStateChange(eventsChanged);
         return state;
       } catch (error) {
@@ -271,12 +339,10 @@
   function schedulePoll() {
     clearTimeout(pollTimer);
     if (!credential) return;
-    const watching = ['family', 'day-detail'].includes(currentViewId()) || trips().some((trip) => trip.status === 'moving');
-    const delay = document.visibilityState === 'visible' && watching ? POLL_FAST_MS : POLL_SLOW_MS;
     pollTimer = setTimeout(async () => {
       if (document.visibilityState === 'visible') await refresh();
       schedulePoll();
-    }, delay);
+    }, POLL_INTERVAL_MS);
   }
 
   function afterStateChange(eventsChanged) {
@@ -315,11 +381,7 @@
     delete payload.calendarId;
     delete payload.category;
     delete payload.source;
-    if (payload.location && (!payload.place || payload.place.name !== payload.location)) {
-      const found = await geocode(payload.location);
-      payload.place = found ? { ...found, name: payload.location } : null;
-    }
-    if (!payload.location) payload.place = null;
+    if (!payload.location || (payload.place && payload.place.name !== payload.location)) payload.place = null;
     const { event: saved } = await api('event', { body: { event: payload } });
     state.events = [...(state.events || []).filter((item) => item.id !== saved.id), saved];
     writeJson(STATE_CACHE_KEY, state);
@@ -350,23 +412,41 @@
     });
   }
 
+  async function searchPlaces(query) {
+    const text = String(query || '').trim();
+    if (!text || !(await whenKakaoReady(6000)) || !window.kakao.maps.services) return [];
+    const services = window.kakao.maps.services;
+    const placeResults = await new Promise((resolve) => {
+      new services.Places().keywordSearch(text, (result, status) => {
+        resolve(status === services.Status.OK ? result || [] : []);
+      });
+    });
+    const candidates = placeResults.slice(0, 5).map((result) => ({
+      lat: Number(result.y),
+      lng: Number(result.x),
+      name: result.place_name || text,
+      address: result.road_address_name || result.address_name || ''
+    })).filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+    if (candidates.length) return candidates;
+    const addressResults = await new Promise((resolve) => {
+      new services.Geocoder().addressSearch(text, (result, status) => {
+        resolve(status === services.Status.OK ? result || [] : []);
+      });
+    });
+    return addressResults.slice(0, 5).map((result) => ({
+      lat: Number(result.y),
+      lng: Number(result.x),
+      name: text,
+      address: result.road_address?.address_name || result.address?.address_name || text
+    })).filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+  }
+
   async function geocode(query) {
     const text = String(query || '').trim();
     if (!text) return null;
     const cache = readJson(GEOCODE_CACHE_KEY, {});
     if (cache[text]) return cache[text];
-    if (!(await whenKakaoReady(6000)) || !window.kakao.maps.services) return null;
-    const services = window.kakao.maps.services;
-    const fromPlaces = await new Promise((resolve) => {
-      new services.Places().keywordSearch(text, (result, status) => {
-        resolve(status === services.Status.OK && result[0] ? { lat: Number(result[0].y), lng: Number(result[0].x), name: result[0].place_name } : null);
-      });
-    });
-    const found = fromPlaces || await new Promise((resolve) => {
-      new services.Geocoder().addressSearch(text, (result, status) => {
-        resolve(status === services.Status.OK && result[0] ? { lat: Number(result[0].y), lng: Number(result[0].x), name: text } : null);
-      });
-    });
+    const found = (await searchPlaces(text))[0] || null;
     if (found) {
       const keys = Object.keys(cache);
       if (keys.length > 200) delete cache[keys[0]];
@@ -384,14 +464,21 @@
         reject(new Error('이 브라우저에서는 위치 기능을 쓸 수 없어요.'));
         return;
       }
-      navigator.geolocation.getCurrentPosition(resolve, (error) => {
+      navigator.geolocation.getCurrentPosition((position) => {
+        const accuracy = position.coords.accuracy;
+        if (!Number.isFinite(accuracy) || accuracy > MAX_TRACKING_ACCURACY_METERS) {
+          reject(new Error(`위치 정확도가 낮아요${Number.isFinite(accuracy) ? ` (약 ${Math.round(accuracy)}m)` : ''}. GPS 신호가 더 좋은 곳에서 다시 시도해 주세요.`));
+          return;
+        }
+        resolve(position);
+      }, (error) => {
         const messages = {
           1: '위치 권한이 꺼져 있어요. 휴대폰 설정 > 브라우저 > 위치를 "허용"으로 바꿔 주세요.',
           2: '현재 위치를 찾지 못했어요. 실외에서 다시 시도해 주세요.',
           3: '위치 확인 시간이 초과됐어요. 다시 시도해 주세요.'
         };
         reject(new Error(messages[error.code] || '현재 위치를 가져오지 못했어요.'));
-      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 15000 });
+      }, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
     });
   }
 
@@ -415,13 +502,26 @@
 
   function startWatching(tripId) {
     stopWatching();
-    tracking = { tripId, watchId: null, pending: [], lastQueued: null, lastSentAt: Date.now(), sending: false, sendPromise: null, wakeLock: null };
+    tracking = { tripId, watchId: null, timer: null, pending: [], lastQueued: myTrip()?.points?.at(-1) || null, lastSentAt: Date.now(), sending: false, sendPromise: null, wakeLock: null };
+    tracking.timer = setInterval(() => {
+      if (!tracking) return;
+      const last = tracking.lastQueued;
+      if (!tracking.pending.length && last && Date.now() - Date.parse(last.at) >= HEARTBEAT_MS) {
+        const heartbeat = { ...last, at: new Date().toISOString() };
+        tracking.pending.push(heartbeat);
+        tracking.lastQueued = heartbeat;
+      }
+      if (Date.now() - tracking.lastSentAt >= SEND_INTERVAL_MS) flushPoints();
+    }, 5000);
     tracking.watchId = navigator.geolocation.watchPosition((position) => {
       if (!tracking) return;
       const point = toPoint(position);
+      if (!Number.isFinite(point.accuracy) || point.accuracy > MAX_TRACKING_ACCURACY_METERS) return;
       const last = tracking.lastQueued;
       const moved = last ? distanceMeters(last, point) : Infinity;
       const elapsed = last ? Date.parse(point.at) - Date.parse(last.at) : Infinity;
+      if (last && elapsed <= 0) return;
+      if (last && moved > elapsed / 1000 * MAX_LOCATION_SPEED_METERS_PER_SECOND + point.accuracy + (last.accuracy || 0)) return;
       if (moved >= MIN_MOVE_METERS || elapsed >= SEND_INTERVAL_MS) {
         tracking.pending.push(point);
         tracking.pending = tracking.pending.slice(-30);
@@ -430,7 +530,7 @@
       if (Date.now() - tracking.lastSentAt >= SEND_INTERVAL_MS || tracking.pending.length >= 10) flushPoints();
     }, () => {
       // 일시적인 GPS 오류는 다음 위치를 기다린다.
-    }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
     requestWakeLock();
     updateStatusPill();
   }
@@ -438,6 +538,7 @@
   function stopWatching() {
     if (!tracking) return;
     if (tracking.watchId !== null) navigator.geolocation.clearWatch(tracking.watchId);
+    clearInterval(tracking.timer);
     tracking.wakeLock?.release?.().catch(() => {});
     tracking = null;
     updateStatusPill();
@@ -598,6 +699,7 @@
     const stale = last && Date.now() - Date.parse(last.at) > STALE_LOCATION_MS;
     let text = `${name} · 이동 중`;
     if (estimate) text += ` · 약 ${estimate.minutes}분 남음 (${formatClock(estimate.arrival)} 도착 예상)`;
+    if (estimate?.meters <= 1000) text += ` · 목적지까지 약 ${formatDistance(estimate.meters)}`;
     if (stale) text += ` · 위치 ${formatAgo(last.at)}`;
     return {
       tone: estimate?.lateMinutes ? 'late' : stale ? 'stale' : 'moving',
@@ -617,9 +719,18 @@
         return `<span class="participant-pill" style="--member-color:${member.color}">${escapeHtml(member.name)}${id === me() ? ' (나)' : ''}</span>`;
       }).join('')}</div>`;
     }
+    for (const progress of eventProgress(event)) {
+      const who = progress.member.id === me() ? '나' : progress.member.name;
+      if (progress.status === 'done') {
+        html += `<p class="trip-status done"><span class="material-symbols-rounded">task_alt</span>${escapeHtml(`${who} · ${formatClock(progress.arrivedAt)} 도착, ${event.endTime} 일정 완료`)}</p>`;
+      } else if (progress.status === 'arrived') {
+        html += `<p class="trip-status arrived"><span class="material-symbols-rounded">where_to_vote</span>${escapeHtml(`${who} · ${formatClock(progress.arrivedAt)} 도착 · ${event.endTime}까지 일정 진행 중`)}</p>`;
+      }
+    }
     const related = trips().filter((trip) => (trip.eventId && trip.eventId === event.id)
       || (trip.memberId === me() && !trip.eventId && trip.title === event.title && trip.startedAt?.slice(0, 10) === event.date));
     for (const trip of related) {
+      if (trip.status === 'arrived' && event.arrivals?.[trip.memberId]) continue;
       const info = describeTrip(trip);
       if (info) html += `<p class="trip-status ${info.tone}"><span class="material-symbols-rounded">${info.icon}</span>${escapeHtml(info.text)}</p>`;
     }
@@ -656,6 +767,19 @@
         overlays.push(line);
       }
       const last = trip.points?.at(-1);
+      if (last && trip.status === 'moving' && Number.isFinite(last.accuracy)) {
+        const accuracyCircle = new maps.Circle({
+          center: latLng(last),
+          radius: Math.max(20, Math.min(last.accuracy, MAX_TRACKING_ACCURACY_METERS)),
+          strokeWeight: 1,
+          strokeColor: color,
+          strokeOpacity: 0.55,
+          fillColor: color,
+          fillOpacity: 0.12
+        });
+        accuracyCircle.setMap(map);
+        overlays.push(accuracyCircle);
+      }
       if (hasDestination) {
         if (trip.status === 'moving' && last) {
           const rest = new maps.Polyline({ path: [latLng(last), latLng(trip.destination)], strokeWeight: 3, strokeColor: color, strokeOpacity: 0.55, strokeStyle: 'shortdash' });
@@ -799,9 +923,9 @@
       ${unavailable ? `<div class="family-notice panel"><span class="material-symbols-rounded">cloud_off</span><div><b>${serverStatus.offline ? '서버에 연결할 수 없어요' : '가족 공유 서버가 아직 준비되지 않았어요'}</b><small>${serverStatus.offline ? '인터넷 연결을 확인해 주세요.' : '관리자가 저장소 연결 설정(DEPLOYMENT.md)을 마치면 사용할 수 있어요.'}</small></div></div>` : ''}
       <form class="family-card panel" id="family-join-form">
         <h2><span class="material-symbols-rounded">group_add</span>초대 코드로 참여하기</h2>
-        <p>가족에게 받은 6자리 코드를 입력하세요.</p>
+        <p>새 초대 코드는 6자리예요. 기존 10자리 코드도 사용할 수 있어요.</p>
         <label class="modal-field">내 이름<input name="memberName" maxlength="20" value="${name}" placeholder="예: 엄마, 준기" required></label>
-        <label class="modal-field">초대 코드<input name="inviteCode" maxlength="8" value="${escapeHtml(pendingJoinCode)}" placeholder="예: K7M2QX" autocapitalize="characters" autocomplete="off" required class="invite-input"></label>
+        <label class="modal-field">초대 코드<input name="inviteCode" maxlength="10" value="${escapeHtml(pendingJoinCode)}" placeholder="예: K7M2QX" autocapitalize="characters" autocomplete="off" required class="invite-input"></label>
         <button class="primary-cta" type="submit" ${busy || unavailable ? 'disabled' : ''}>가족에 참여하기</button>
       </form>
       <form class="family-card panel" id="family-create-form">
@@ -830,10 +954,35 @@
       .slice(0, 4);
   }
 
+  const PROGRESS_LABELS = { waiting: '예정', moving: '이동 중', arrived: '도착', done: '완료', nodata: '기록 없음' };
+
+  function todayBoardHtml() {
+    const today = localDateString(new Date());
+    const list = familyEvents()
+      .filter((event) => event.date === today)
+      .sort((first, second) => (first.allDay ? '' : first.startTime).localeCompare(second.allDay ? '' : second.startTime));
+    if (!list.length) return '';
+    const tracked = list.filter((event) => eventProgress(event).length);
+    const done = tracked.filter((event) => eventProgress(event).every((item) => item.status === 'done')).length;
+    const allDone = tracked.length > 0 && done === tracked.length;
+    const summary = allDone ? '오늘 가족 일정을 모두 마쳤어요' : `오늘 가족 일정 ${list.length}개${tracked.length ? ` · ${done}개 완료` : ''}`;
+    return `<section class="family-today panel ${allDone ? 'all-done' : ''}">
+      <h2><span class="material-symbols-rounded">${allDone ? 'celebration' : 'today'}</span>${escapeHtml(summary)}</h2>
+      ${list.map((event) => `<div class="today-row">
+        <time>${event.allDay ? '종일' : escapeHtml(event.startTime)}</time>
+        <div><b>${escapeHtml(event.title)}</b>${event.location ? `<small>${escapeHtml(event.location)}</small>` : ''}
+          <div class="progress-chips">${eventProgress(event).map((item) => `<span class="progress-chip ${item.status}" style="--member-color:${item.member.color}">${escapeHtml(item.member.id === me() ? '나' : item.member.name)} · ${item.status === 'arrived' || item.status === 'done' ? `${formatClock(item.arrivedAt)} 도착${item.status === 'done' ? ' · 완료' : ''}` : PROGRESS_LABELS[item.status]}</span>`).join('')}</div>
+        </div>
+      </div>`).join('')}
+    </section>`;
+  }
+
   function renderJoined(section) {
     const mine = myTrip();
     const sharing = mine?.status === 'moving';
     const estimate = sharing ? estimateTrip(mine) : null;
+    const locationAccuracy = Number(mine?.points?.at(-1)?.accuracy);
+    const accuracyLabel = Number.isFinite(locationAccuracy) ? `GPS 정확도 ±${Math.round(locationAccuracy)}m` : 'GPS 정확도 확인 중';
     const departures = todaysDepartures();
     const activity = readJson(ACTIVITY_KEY, []).slice(0, 6);
     const canNotify = 'Notification' in window && Notification.permission === 'default';
@@ -841,11 +990,12 @@
     section.dataset.mode = 'joined';
     section.innerHTML = `
       ${heading(state.family.name, `가족 ${members().length}명 · 서로의 일정과 이동을 함께 봐요`)}
+      ${todayBoardHtml()}
       <section class="family-share panel ${sharing ? 'is-sharing' : ''}">
         ${sharing ? `
           <div class="share-live"><span class="live-dot"></span><b>내 위치 공유 중</b><small>${escapeHtml(mine.title)}${mine.destination ? ` → ${escapeHtml(mine.destination.name)}` : ''}</small></div>
-          ${estimate ? `<p class="share-eta">약 <b>${estimate.minutes}분</b> 남음 · ${formatClock(estimate.arrival)} 도착 예상${estimate.lateMinutes ? ` <em>${estimate.lateMinutes}분 늦을 수 있어요</em>` : ''}</p>` : '<p class="share-eta">목적지가 없어 도착은 직접 눌러 주세요.</p>'}
-          <p class="share-note">${tracking ? '화면을 켜 두면 위치가 더 정확하게 전달돼요.' : '이 기기에서 위치를 보내고 있지 않아요. 아래 버튼으로 다시 시작하세요.'}</p>
+          ${estimate ? `<p class="share-eta">약 <b>${estimate.minutes}분</b> 남음 · ${formatClock(estimate.arrival)} 도착 예상${estimate.meters <= 1000 ? ` · 목적지까지 약 ${formatDistance(estimate.meters)}` : ''}${estimate.lateMinutes ? ` <em>${estimate.lateMinutes}분 늦을 수 있어요</em>` : ''}</p>` : '<p class="share-eta">목적지가 없어 도착은 직접 눌러 주세요.</p>'}
+          <p class="share-note">${accuracyLabel} · ${tracking ? '화면을 켜 두면 위치가 더 정확하게 전달돼요.' : '이 기기에서 위치를 보내고 있지 않아요. 아래 버튼으로 다시 시작하세요.'}</p>
           <div class="trip-actions">
             ${tracking ? '' : '<button type="button" class="trip-resume-button" data-trip-resume>이 기기에서 계속 공유</button>'}
             <button type="button" class="trip-arrive-button" data-trip-arrive>도착했어요</button>
@@ -874,7 +1024,7 @@
         <div><span>초대 코드</span><strong>${escapeHtml(state.family.inviteCode)}</strong></div>
         <button type="button" class="secondary-cta" data-share-invite><span class="material-symbols-rounded">share</span>초대 링크 보내기</button>
       </section>
-      ${activity.length ? `<section class="family-activity panel"><h2>최근 소식</h2>${activity.map((entry) => `<p><span class="material-symbols-rounded">${entry.type === 'arrived' ? 'where_to_vote' : 'near_me'}</span>${escapeHtml(entry.text)}<small>${formatAgo(entry.at)}</small></p>`).join('')}</section>` : ''}
+      ${activity.length ? `<section class="family-activity panel"><h2>최근 소식</h2>${activity.map((entry) => `<p><span class="material-symbols-rounded">${ACTIVITY_ICONS[entry.type] || 'near_me'}</span>${escapeHtml(entry.text)}<small>${formatAgo(entry.at)}</small></p>`).join('')}</section>` : ''}
       <div class="family-footer">
         ${canNotify ? '<button type="button" class="link-button" data-enable-notifications><span class="material-symbols-rounded">notifications_active</span>출발·도착 알림 받기</button>' : ''}
         <button type="button" class="link-button danger" data-leave-family><span class="material-symbols-rounded">logout</span>가족에서 나가기</button>
@@ -1027,14 +1177,17 @@
       renderFamilyView();
       refresh();
     }
-    if (id === 'day-detail') updateDayMap();
+    if (id === 'day-detail') {
+      if (typeof renderCalendar === 'function') renderCalendar();
+      else updateDayMap();
+    }
     schedulePoll();
   }
 
   function notificationsHtml() {
     const activity = readJson(ACTIVITY_KEY, []).slice(0, 10);
     if (!activity.length) return '';
-    return `<ul class="notification-list">${activity.map((entry) => `<li><span class="material-symbols-rounded">${entry.type === 'arrived' ? 'where_to_vote' : 'near_me'}</span><span>${escapeHtml(entry.text)}<small>${formatAgo(entry.at)}</small></span></li>`).join('')}</ul>`;
+    return `<ul class="notification-list">${activity.map((entry) => `<li><span class="material-symbols-rounded">${ACTIVITY_ICONS[entry.type] || 'near_me'}</span><span>${escapeHtml(entry.text)}<small>${formatAgo(entry.at)}</small></span></li>`).join('')}</ul>`;
   }
 
   window.MapDuleFamily = {
@@ -1051,6 +1204,7 @@
     notificationsHtml,
     startTripForEvent,
     geocode,
+    searchPlaces,
     updateDayMap
   };
 

@@ -145,3 +145,20 @@
   .family-invite{flex-direction:column;align-items:stretch;text-align:center}
   .family-invite .secondary-cta{width:100%}
 }
+
+.family-today{padding:18px;margin-bottom:14px}
+.family-today.all-done{background:linear-gradient(135deg,#e9f8f1,#fff);border-color:#bfe8d5}
+.family-today.all-done h2 .material-symbols-rounded{color:var(--green)!important}
+.today-row{display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;padding:10px 0;border-top:1px solid #eef0f5}
+.today-row:first-of-type{border-top:0}
+.today-row time{font-family:'Space Grotesk';font-weight:700;color:var(--muted);padding-top:2px}
+.today-row b{display:block;font-size:15px}
+.today-row small{display:block;color:var(--muted);font-size:12px}
+.progress-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.progress-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:99px;background:#f1f2f6;color:#4b5064;font-size:11px;font-weight:800}
+.progress-chip:before{content:'';width:7px;height:7px;border-radius:50%;background:var(--member-color)}
+.progress-chip.moving{background:var(--family-soft);color:var(--family-dark)}
+.progress-chip.arrived{background:#e6f1ff;color:#1e4fa3}
+.progress-chip.done{background:#e3f6ec;color:var(--green)}
+.progress-chip.nodata{background:#fff4e0;color:#8a5a00}
+.trip-status.done{background:#e3f6ec;color:var(--green)}

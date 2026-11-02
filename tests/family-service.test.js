@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createFamilyService, MAX_TRAIL_POINTS } = require('../api/src/family-service');
-const { createMemoryStore, createTableStore } = require('../api/src/family-store');
+const { createFileStore, createMemoryStore, createTableStore } = require('../api/src/family-store');
 
 function setup(startTime = Date.parse('2026-10-25T09:00:00+09:00')) {
   let clock = startTime;
@@ -19,6 +22,7 @@ async function createFamilyWithTwoMembers(service) {
   const parent = await service.handle({ method: 'POST', action: 'create', body: { familyName: '백씨네', memberName: '아빠' } });
   const state = await service.handle({ method: 'GET', action: 'state', credential: parent.credential });
   const child = await service.handle({ method: 'POST', action: 'join', body: { inviteCode: state.family.inviteCode.toLowerCase(), memberName: '준기' } });
+  assert.match(state.family.inviteCode, /^[A-HJ-NP-Z2-9]{6}$/);
   return { parent, child, inviteCode: state.family.inviteCode };
 }
 
@@ -47,6 +51,36 @@ test('rejects unknown invite codes and forged credentials', async () => {
     (error) => error.statusCode === 401
   );
   await assert.rejects(service.handle({ method: 'GET', action: 'state' }), (error) => error.statusCode === 401);
+});
+
+test('continues accepting six-character invite codes already issued', async () => {
+  const { service, store } = setup();
+  const parent = await service.handle({ method: 'POST', action: 'create', body: { memberName: '아빠' } });
+  const familyId = parent.credential.split('.')[0];
+  const familyKey = `family:${familyId}`;
+  const family = await store.get(familyKey, 'info');
+  await store.remove('invite', family.inviteCode);
+  family.inviteCode = 'K7M2QX';
+  await store.put(familyKey, 'info', family);
+  await store.put('invite', family.inviteCode, { familyId });
+
+  const joined = await service.handle({ method: 'POST', action: 'join', body: { inviteCode: 'K7M2QX', memberName: '준기' } });
+  assert.ok(joined.credential);
+});
+
+test('continues accepting existing ten-character invite codes', async () => {
+  const { service, store } = setup();
+  const parent = await service.handle({ method: 'POST', action: 'create', body: { memberName: '아빠' } });
+  const familyId = parent.credential.split('.')[0];
+  const familyKey = `family:${familyId}`;
+  const family = await store.get(familyKey, 'info');
+  await store.remove('invite', family.inviteCode);
+  family.inviteCode = 'K7M2QX9B4C';
+  await store.put(familyKey, 'info', family);
+  await store.put('invite', family.inviteCode, { familyId });
+
+  const joined = await service.handle({ method: 'POST', action: 'join', body: { inviteCode: 'K7M2QX9B4C', memberName: '준기' } });
+  assert.ok(joined.credential);
 });
 
 test('shares family events with participants and skips unchanged event lists', async () => {
@@ -120,6 +154,60 @@ test('tracks a trip from departure until it arrives near the destination', async
   advance(13 * 60 * 60 * 1000);
   const later = await service.handle({ method: 'GET', action: 'state', credential: parent.credential });
   assert.equal(later.trips.length, 0, 'old finished trips are hidden');
+});
+
+test('ignores inaccurate GPS fixes and waits for a reliable arrival point', async () => {
+  const { service, advance, time } = setup();
+  const { child } = await createFamilyWithTwoMembers(service);
+  const destination = { lat: 37.5, lng: 127, name: '목적지' };
+  const { trip } = await service.handle({
+    method: 'POST', action: 'trip-start', credential: child.credential,
+    body: { title: '목적지 이동', destination, points: [{ ...destination, accuracy: 250, at: new Date(time()).toISOString() }] }
+  });
+  assert.equal(trip.status, 'moving');
+  assert.equal(trip.points.length, 0, 'poor initial fixes are discarded');
+
+  advance(5000);
+  const inaccurate = await service.handle({
+    method: 'POST', action: 'trip-point', credential: child.credential,
+    body: { tripId: trip.id, points: [{ ...destination, accuracy: 101, at: new Date(time()).toISOString() }] }
+  });
+  assert.equal(inaccurate.trip.status, 'moving');
+  assert.equal(inaccurate.trip.points.length, 0, 'poor fixes do not trigger arrival');
+
+  advance(5000);
+  const accurate = await service.handle({
+    method: 'POST', action: 'trip-point', credential: child.credential,
+    body: { tripId: trip.id, points: [{ ...destination, accuracy: 15, at: new Date(time()).toISOString() }] }
+  });
+  assert.equal(accurate.trip.status, 'arrived');
+});
+
+test('records arrival on the linked family event so it survives later trips', async () => {
+  const { service, advance, time } = setup();
+  const { parent, child } = await createFamilyWithTwoMembers(service);
+  const academy = { lat: 36.6265, lng: 127.4317, name: '수학학원' };
+  const { event } = await service.handle({
+    method: 'POST', action: 'event', credential: parent.credential,
+    body: { event: { title: '수학학원', date: '2026-10-25', startTime: '17:00', endTime: '18:30', location: '수학학원', participants: [child.memberId], place: academy } }
+  });
+  const { trip } = await service.handle({
+    method: 'POST', action: 'trip-start', credential: child.credential,
+    body: { eventId: event.id, points: [{ lat: 36.64, lng: 127.48, at: new Date(time()).toISOString() }] }
+  });
+  assert.deepEqual(trip.destination, academy);
+
+  advance(15 * 60 * 1000);
+  await service.handle({
+    method: 'POST', action: 'trip-point', credential: child.credential,
+    body: { tripId: trip.id, points: [{ lat: 36.62652, lng: 127.43172, at: new Date(time()).toISOString() }] }
+  });
+  const state = await service.handle({ method: 'GET', action: 'state', credential: parent.credential });
+  assert.ok(state.events[0].arrivals[child.memberId]);
+
+  await service.handle({ method: 'POST', action: 'trip-start', credential: child.credential, body: { title: '집으로' } });
+  const later = await service.handle({ method: 'GET', action: 'state', credential: parent.credential });
+  assert.ok(later.events[0].arrivals[child.memberId]);
 });
 
 test('stopping a share deletes the stored trip and route', async () => {
@@ -240,4 +328,18 @@ test('table store signs Azure Table Storage REST requests', async () => {
     () => createTableStore('DefaultEndpointsProtocol=http;AccountName=mapdulestore;AccountKey=dGVzdGtleQ=='),
     /HTTPS/
   );
+});
+
+test('restricts local family data files to the current user on POSIX systems', async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mapdule-family-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, 'family.json');
+  fs.writeFileSync(filePath, '[]', { mode: 0o666 });
+
+  const store = createFileStore(filePath);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+  await store.put('family:test', 'info', { name: '가족' });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')), [['family:test\u0000info', { name: '가족' }]]);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
 });

@@ -13,6 +13,7 @@ test('serves the app but blocks hidden files and repository metadata', async (co
   assert.equal(appResponse.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(appResponse.headers.get('x-frame-options'), 'DENY');
   assert.match(appResponse.headers.get('content-security-policy'), /object-src 'none'/);
+  assert.match(appResponse.headers.get('content-security-policy'), /upgrade-insecure-requests/);
   assert.match(appResponse.headers.get('content-security-policy'), /script-src 'self'/);
   assert.match(appResponse.headers.get('content-security-policy'), /https:\/\/t1\.kakaocdn\.net/);
 

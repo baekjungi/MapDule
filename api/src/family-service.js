@@ -9,7 +9,8 @@ const MAX_MEMBERS = 12;
 const MAX_EVENTS = 1500;
 const MAX_TRAIL_POINTS = 400;
 const MAX_POINTS_PER_REQUEST = 30;
-const ARRIVAL_RADIUS_METERS = 120;
+const MAX_TRACKING_ACCURACY_METERS = 100;
+const ARRIVAL_RADIUS_METERS = 60;
 const ENDED_TRIP_VISIBLE_MS = 12 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 2 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -297,6 +298,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
       notes: cleanText(input.notes, 300, '메모'),
       participants,
       place: cleanPlace(input.place),
+      arrivals: existing && existing.date === input.date ? existing.arrivals || {} : {},
       createdBy: existing?.createdBy || member.id,
       createdAt: existing?.createdAt || new Date(now()).toISOString(),
       updatedBy: member.id,
@@ -326,10 +328,11 @@ function createFamilyService({ store, now = () => Date.now() }) {
       const at = Date.parse(point?.at);
       if (!coordinate || !Number.isFinite(at) || at < earliest || at > latest) return null;
       const accuracy = Number(point.accuracy);
+      if (Number.isFinite(accuracy) && (accuracy < 0 || accuracy > MAX_TRACKING_ACCURACY_METERS)) return null;
       return {
         ...coordinate,
         at: new Date(at).toISOString(),
-        accuracy: Number.isFinite(accuracy) && accuracy >= 0 ? Math.min(Math.round(accuracy), 5000) : null
+        accuracy: Number.isFinite(accuracy) ? Math.round(accuracy) : null
       };
     }).filter(Boolean);
   }
@@ -337,13 +340,24 @@ function createFamilyService({ store, now = () => Date.now() }) {
   function applyArrival(trip) {
     const last = trip.points.at(-1);
     if (trip.status !== 'moving' || !trip.destination || !last) return;
-    const tolerance = Math.max(ARRIVAL_RADIUS_METERS, Math.min(last.accuracy || 0, 300));
+    const accuracy = Number.isFinite(last.accuracy) ? Math.min(last.accuracy, MAX_TRACKING_ACCURACY_METERS) : ARRIVAL_RADIUS_METERS;
+    const tolerance = Math.max(ARRIVAL_RADIUS_METERS, accuracy);
     if (distanceMeters(last, trip.destination) <= tolerance) {
       trip.status = 'arrived';
       trip.endedAt = last.at;
       trip.points = [];
       trip.destination = { name: trip.destination.name || '' };
     }
+  }
+
+  async function recordArrival(family, trip, wasMoving) {
+    if (!wasMoving || trip.status !== 'arrived' || !trip.eventId) return;
+    const key = `event_${trip.eventId}`;
+    const event = await store.get(familyKey(family.id), key);
+    if (!event) return;
+    event.arrivals = { ...(event.arrivals || {}), [trip.memberId]: trip.endedAt || new Date(now()).toISOString() };
+    await store.put(familyKey(family.id), key, event);
+    await touchEventsRevision(family);
   }
 
   async function startTrip(context, body) {
@@ -369,6 +383,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     trip.points = cleanPoints(body.points, startedAt);
     applyArrival(trip);
     await store.put(familyKey(family.id), `trip_${member.id}`, trip);
+    await recordArrival(family, trip, true);
     return { trip };
   }
 
@@ -377,6 +392,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     const trip = await store.get(familyKey(family.id), `trip_${member.id}`);
     if (!trip || trip.id !== body.tripId) throw new FamilyError(404, '진행 중인 이동이 없습니다.', 'TRIP_NOT_FOUND');
     if (trip.status !== 'moving') return { trip };
+    const wasMoving = trip.status === 'moving';
     const points = cleanPoints(body.points, trip.startedAt);
     const lastTime = trip.points.at(-1)?.at || '';
     const merged = [...trip.points, ...points.filter((point) => point.at > lastTime)]
@@ -385,6 +401,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     trip.updatedAt = new Date(now()).toISOString();
     applyArrival(trip);
     await store.put(familyKey(family.id), `trip_${member.id}`, trip);
+    await recordArrival(family, trip, wasMoving);
     return { trip };
   }
 
@@ -392,7 +409,8 @@ function createFamilyService({ store, now = () => Date.now() }) {
     const { family, member } = context;
     const trip = await store.get(familyKey(family.id), `trip_${member.id}`);
     if (!trip || trip.id !== body.tripId) throw new FamilyError(404, '진행 중인 이동이 없습니다.', 'TRIP_NOT_FOUND');
-    if (trip.status === 'moving') {
+    const wasMoving = trip.status === 'moving';
+    if (wasMoving) {
       trip.status = body.reason === 'arrived' ? 'arrived' : 'stopped';
       trip.endedAt = new Date(now()).toISOString();
     }
@@ -408,6 +426,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     }
     trip.updatedAt = new Date(now()).toISOString();
     await store.put(familyKey(family.id), `trip_${member.id}`, trip);
+    await recordArrival(family, trip, wasMoving);
     return { trip };
   }
 
