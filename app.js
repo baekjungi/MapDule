@@ -263,21 +263,111 @@ function initializeKakaoMap() {
 
 initializeKakaoMap();
 
-function showCurrentLocation() {
+function showLocationPermissionDialog({ title, description, details, actionLabel, onContinue, onCancel }) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-backdrop location-permission-backdrop';
+  modal.innerHTML = `
+    <section class="modal location-permission-modal" role="dialog" aria-modal="true" aria-labelledby="location-permission-title">
+      <button class="modal-close" type="button" aria-label="닫기"><span class="material-symbols-rounded">close</span></button>
+      <div class="location-permission-icon"><span class="material-symbols-rounded">location_on</span></div>
+      <h2 id="location-permission-title">${escapeHtml(title)}</h2>
+      <div class="location-permission-copy"><p>${escapeHtml(description)}</p>${details?.length ? `<ul>${details.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}<small>위치 정보 접근 권한 · 선택</small></div>
+      <footer class="location-permission-actions"><button class="location-permission-cancel" type="button">지금은 괜찮아요</button><button class="location-permission-continue" type="button">${escapeHtml(actionLabel)}</button></footer>
+    </section>`;
+  document.body.append(modal);
+  let closed = false;
+  const close = (cancelled) => {
+    if (closed) return;
+    closed = true;
+    modal.remove();
+    if (cancelled) onCancel?.();
+  };
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal || event.target.closest('.modal-close, .location-permission-cancel')) {
+      close(true);
+      return;
+    }
+    if (event.target.closest('.location-permission-continue')) {
+      onContinue?.();
+      close(false);
+    }
+  });
+  modal.querySelector('.modal-close').focus();
+}
+
+function requestLocationWithConsent({ title, description, actionLabel }) {
+  return new Promise((resolve, reject) => {
+    const cancel = () => reject(Object.assign(new Error('위치 확인을 취소했어요.'), { code: 'LOCATION_CANCELLED' }));
+    const settingsDetails = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+      ? ['Safari 주소창의 aA > 웹 사이트 설정 > 위치에서 허용해 주세요.', '설정을 바꾼 뒤 돌아와 다시 확인을 눌러 주세요.']
+      : ['주소창 왼쪽의 사이트 정보 아이콘 > 위치 > 허용을 선택해 주세요.', '설정을 바꾼 뒤 돌아와 다시 확인을 눌러 주세요.'];
+    const requestPosition = () => {
+      if (!navigator.geolocation) {
+        reject(new Error('이 브라우저에서는 위치 기능을 사용할 수 없습니다.'));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(resolve, (error) => {
+        if (error.code === 1) {
+          showLocationPermissionDialog({
+            title: '위치 권한이 꺼져 있어요',
+            description: '정확한 일정 위치와 이동 거리를 보려면 브라우저 설정에서 위치 권한을 허용해 주세요.',
+            details: settingsDetails,
+            actionLabel: '설정 변경 후 다시 확인',
+            onContinue: requestPosition,
+            onCancel: cancel
+          });
+          return;
+        }
+        reject(new Error(error.code === 2
+          ? '현재 위치를 찾지 못했어요. GPS 신호가 더 좋은 곳에서 다시 시도해 주세요.'
+          : error.code === 3 ? '위치 확인 시간이 초과됐어요. 다시 시도해 주세요.' : '현재 위치를 가져오지 못했어요.'));
+      }, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
+    };
+    const showPrepermission = () => showLocationPermissionDialog({
+      title,
+      description,
+      details: ['위치 정보는 선택 권한이에요.', '이동 공유는 직접 출발을 누른 경우에만 가족에게 전송돼요.'],
+      actionLabel,
+      onContinue: requestPosition,
+      onCancel: cancel
+    });
+    let permissionQuery = Promise.resolve('prompt');
+    try {
+      if (navigator.permissions?.query) {
+        permissionQuery = navigator.permissions.query({ name: 'geolocation' }).then((permission) => permission.state).catch(() => 'prompt');
+      }
+    } catch {
+      permissionQuery = Promise.resolve('prompt');
+    }
+    permissionQuery.then((permission) => {
+      if (permission === 'granted') requestPosition();
+      else if (permission === 'denied') {
+        showLocationPermissionDialog({
+          title: '위치 권한이 꺼져 있어요',
+          description: '브라우저 설정에서 위치 권한을 허용해야 현재 위치와 이동 거리를 확인할 수 있어요.',
+          details: settingsDetails,
+          actionLabel: '설정 변경 후 다시 확인',
+          onContinue: requestPosition,
+          onCancel: cancel
+        });
+      } else showPrepermission();
+    });
+  });
+}
+
+async function showCurrentLocation() {
   if (!kakaoMap || !window.kakao?.maps) {
     showToast('카카오 지도가 아직 준비되지 않았습니다.', 'info');
     return;
   }
-  if (!navigator.geolocation) {
-    showToast('이 브라우저에서는 위치 기능을 사용할 수 없습니다.', 'info');
-    return;
-  }
-
   const locationButton = document.querySelector('.map-location-button');
   if (locationButton) locationButton.disabled = true;
-  showToast('현재 위치 권한을 확인하고 있습니다.', 'info');
-
-  navigator.geolocation.getCurrentPosition((position) => {
+  try {
+    const position = await requestLocationWithConsent({
+      title: '내 위치를 지도에서 확인할까요?',
+      description: '현재 위치를 지도에 표시해 가까운 일정 장소와의 거리를 확인할 수 있어요.',
+      actionLabel: '내 위치 확인하기'
+    });
     const coords = new window.kakao.maps.LatLng(position.coords.latitude, position.coords.longitude);
     if (!currentLocationMarker) {
       currentLocationMarker = new window.kakao.maps.Marker({ position: coords, title: '현재 위치' });
@@ -287,18 +377,13 @@ function showCurrentLocation() {
     currentLocationMarker.setMap(kakaoMap);
     kakaoMap.setLevel(4);
     kakaoMap.panTo(coords);
-    if (locationButton) locationButton.disabled = false;
     document.querySelector('.status-pill').innerHTML = '<i></i>현재 위치 표시됨';
     showToast('현재 위치를 지도에 표시했습니다.', 'success');
-  }, (error) => {
-    const messages = {
-      1: '위치 권한이 거부되었습니다. 브라우저 사이트 설정에서 위치를 허용해 주세요.',
-      2: '현재 위치를 확인할 수 없습니다. GPS 신호를 확인해 주세요.',
-      3: '위치 확인 시간이 초과됐습니다. 다시 시도해 주세요.'
-    };
+  } catch (error) {
+    if (error.code !== 'LOCATION_CANCELLED') showToast(error.message || '현재 위치를 가져오지 못했습니다.', 'info');
+  } finally {
     if (locationButton) locationButton.disabled = false;
-    showToast(messages[error.code] || '현재 위치를 가져오지 못했습니다.', 'info');
-  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+  }
 }
 
 function showToast(message, tone = 'default') {

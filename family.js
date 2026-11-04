@@ -459,26 +459,19 @@
   // ---------- 출발~도착 위치 공유 ----------
 
   function getPosition() {
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('이 브라우저에서는 위치 기능을 쓸 수 없어요.'));
-        return;
+    if (typeof window.requestLocationWithConsent !== 'function') {
+      return Promise.reject(new Error('위치 권한 요청을 시작할 수 없습니다. 페이지를 새로고침해 주세요.'));
+    }
+    return window.requestLocationWithConsent({
+      title: '가족에게 이동을 공유할까요?',
+      description: '현재 위치를 공유하면 가족이 지도에서 이동 경로와 목적지까지의 거리를 확인할 수 있어요.',
+      actionLabel: '위치 공유 시작'
+    }).then((position) => {
+      const accuracy = position.coords.accuracy;
+      if (!Number.isFinite(accuracy) || accuracy > MAX_TRACKING_ACCURACY_METERS) {
+        throw new Error(`위치 정확도가 낮아요${Number.isFinite(accuracy) ? ` (약 ${Math.round(accuracy)}m)` : ''}. GPS 신호가 더 좋은 곳에서 다시 시도해 주세요.`);
       }
-      navigator.geolocation.getCurrentPosition((position) => {
-        const accuracy = position.coords.accuracy;
-        if (!Number.isFinite(accuracy) || accuracy > MAX_TRACKING_ACCURACY_METERS) {
-          reject(new Error(`위치 정확도가 낮아요${Number.isFinite(accuracy) ? ` (약 ${Math.round(accuracy)}m)` : ''}. GPS 신호가 더 좋은 곳에서 다시 시도해 주세요.`));
-          return;
-        }
-        resolve(position);
-      }, (error) => {
-        const messages = {
-          1: '위치 권한이 꺼져 있어요. 휴대폰 설정 > 브라우저 > 위치를 "허용"으로 바꿔 주세요.',
-          2: '현재 위치를 찾지 못했어요. 실외에서 다시 시도해 주세요.',
-          3: '위치 확인 시간이 초과됐어요. 다시 시도해 주세요.'
-        };
-        reject(new Error(messages[error.code] || '현재 위치를 가져오지 못했어요.'));
-      }, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
+      return position;
     });
   }
 
@@ -607,13 +600,13 @@
     busy = true;
     renderFamilyView();
     try {
-      if (myTrip()?.status === 'moving') await endTrip('stopped', { silent: true });
       const profile = readJson('mapdule-profile', {});
       const travelMode = mode || (['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit');
       const [position, place] = await Promise.all([
         getPosition(),
         destination ? Promise.resolve(destination) : geocode(destinationText)
       ]);
+      if (myTrip()?.status === 'moving') await endTrip('stopped', { silent: true });
       if (destinationText && !place) showToast('목적지 위치를 찾지 못해 도착 자동 확인 없이 공유해요.', 'info');
       const { trip } = await api('trip-start', {
         body: {
@@ -636,7 +629,7 @@
       mapFittedOnce = false;
       afterStateChange(false);
     } catch (error) {
-      showToast(error.message || '출발을 알리지 못했어요.', 'info');
+      if (error.code !== 'LOCATION_CANCELLED') showToast(error.message || '출발을 알리지 못했어요.', 'info');
     } finally {
       busy = false;
       renderFamilyView();

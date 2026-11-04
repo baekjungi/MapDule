@@ -286,6 +286,24 @@ body.calendar-visible .app-shell{padding-bottom:calc(92px + env(safe-area-inset-
 .profile-crop-actions{display:flex;justify-content:flex-end;gap:8px;width:min(100%,300px)}
 .profile-crop-actions button{min-height:40px;padding:8px 14px;border-radius:8px;background:#f1f2f6;color:#53576b;font-size:12px;font-weight:800}
 .profile-crop-actions .profile-crop-apply{background:var(--indigo);color:#fff}
+.location-permission-modal{padding:24px 20px 18px}
+.location-permission-icon{display:grid;width:56px;height:56px;place-items:center;margin-bottom:12px;border-radius:18px;background:#e9e9ff;color:var(--indigo)}
+.location-permission-icon .material-symbols-rounded{font-size:30px}
+.location-permission-modal h2{margin:0 40px 10px 0;color:var(--ink);font-size:20px;line-height:1.3}
+.location-permission-copy{color:var(--muted);font-size:13px;line-height:1.6}
+.location-permission-copy p{margin:0 0 12px}
+.location-permission-copy ul{display:grid;gap:7px;margin:0;padding:0;list-style:none}
+.location-permission-copy li{position:relative;padding-left:18px}
+.location-permission-copy li:before{position:absolute;left:2px;content:'•';color:var(--indigo);font-weight:800}
+.location-permission-copy small{display:block;margin-top:12px;color:#8a8e9f;font-size:11px}
+.location-permission-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:8px;margin-top:18px}
+.location-permission-actions button{min-height:44px;padding:10px 12px;border-radius:9px;font-size:12px;font-weight:800}
+.location-permission-cancel{background:#f1f2f6;color:#63677a}
+.location-permission-continue{background:var(--indigo);color:#fff}
+@media(max-width:600px){
+	.location-permission-backdrop{place-items:end center;padding:0}
+	.location-permission-modal{width:100%;max-height:calc(100vh - 16px);max-height:calc(100dvh - env(safe-area-inset-top) - 8px);overflow-y:auto;border-radius:18px 18px 0 0;padding:24px 20px max(16px,env(safe-area-inset-bottom))}
+}
 @media(max-width:600px){
 	.profile-editor-backdrop{place-items:stretch;padding:0;background:#fff}
 	.profile-editor{width:100%;height:100vh;height:100dvh;max-height:100dvh;border:0;border-radius:0;box-shadow:none}
