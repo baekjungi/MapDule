@@ -4,6 +4,9 @@ const EVENTS_STORAGE_KEY = 'mapdule-events';
 const PROFILE_STORAGE_KEY = 'mapdule-profile';
 let editingEventId = null;
 let kakaoMap = null;
+let kakaoSdkReady = false;
+let kakaoSdkLoading = false;
+let kakaoMapCreating = false;
 let currentLocationMarker = null;
 let displayedMonth = new Date();
 let calendarViewMode = 'month';
@@ -158,27 +161,67 @@ function initializeKakaoMap() {
   const key = document.querySelector('meta[name="kakao-javascript-key"]')?.content.trim();
   const mapCanvas = document.querySelector('#kakao-map');
   const fallback = document.querySelector('.map-empty');
-  if (!key || !mapCanvas || !fallback) return;
+  if (!mapCanvas || !fallback) return;
+
+  const showError = (message) => {
+    fallback.hidden = false;
+    fallback.innerHTML = `<span class="material-symbols-rounded">error</span><b>카카오 지도를 불러오지 못했어요</b><small>${escapeHtml(message)}</small>`;
+  };
+  const createMapWhenVisible = () => {
+    if (!kakaoSdkReady || kakaoMap || kakaoMapCreating
+      || document.querySelector('.view.active')?.id !== 'day-detail'
+      || !mapCanvas.clientWidth || !mapCanvas.clientHeight) return;
+    kakaoMapCreating = true;
+    try {
+      window.kakao.maps.load(() => {
+        kakaoMapCreating = false;
+        if (kakaoMap || document.querySelector('.view.active')?.id !== 'day-detail'
+          || !mapCanvas.clientWidth || !mapCanvas.clientHeight) return;
+        try {
+          kakaoMap = new window.kakao.maps.Map(mapCanvas, {
+            center: new window.kakao.maps.LatLng(37.5665, 126.978),
+            level: 8
+          });
+          fallback.hidden = true;
+          window.MapDuleFamily?.updateDayMap();
+        } catch {
+          showError('화면을 새로 열고, Kakao Developers의 JavaScript 키와 허용 도메인을 확인해 주세요.');
+        }
+      });
+    } catch {
+      kakaoMapCreating = false;
+      showError('화면을 새로 열고, Kakao Developers의 JavaScript 키와 허용 도메인을 확인해 주세요.');
+    }
+  };
+
+  if (!key) {
+    showError('Kakao Developers의 JavaScript 키가 설정되지 않았어요.');
+    return;
+  }
+  if (kakaoSdkReady) {
+    createMapWhenVisible();
+    return;
+  }
+  if (kakaoSdkLoading) return;
 
   const script = document.createElement('script');
   script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&libraries=services&autoload=false`;
   script.async = true;
+  kakaoSdkLoading = true;
+  fallback.hidden = false;
+  fallback.innerHTML = '<span class="material-symbols-rounded">progress_activity</span><b>지도를 불러오는 중이에요</b><small>잠시만 기다려 주세요.</small>';
   script.onload = () => {
+    kakaoSdkLoading = false;
     if (!window.kakao?.maps?.load) {
-      fallback.innerHTML = '<span class="material-symbols-rounded">error</span><b>카카오 지도를 불러오지 못했어요</b><small>JavaScript 키와 허용 도메인을 확인해 주세요.</small>';
+      showError('Kakao Maps SDK가 초기화되지 않았어요. JavaScript 키와 허용 도메인을 확인해 주세요.');
       return;
     }
-    window.kakao.maps.load(() => {
-      kakaoMap = new window.kakao.maps.Map(mapCanvas, {
-        center: new window.kakao.maps.LatLng(37.5665, 126.978),
-        level: 8
-      });
-      fallback.hidden = true;
-      window.MapDuleFamily?.updateDayMap();
-    });
+    kakaoSdkReady = true;
+    createMapWhenVisible();
   };
   script.onerror = () => {
-    fallback.innerHTML = '<span class="material-symbols-rounded">error</span><b>카카오 지도를 불러오지 못했어요</b><small>JavaScript 키와 허용 도메인을 확인해 주세요.</small>';
+    kakaoSdkLoading = false;
+    showError('Kakao Maps SDK 연결에 실패했어요. 네트워크와 허용 도메인을 확인해 주세요.');
   };
   document.head.append(script);
 }
@@ -262,12 +305,16 @@ function showModal(title, content, actionText = '확인', onAction) {
 
 function showView(id) {
   views.forEach((view) => view.classList.toggle('active', view.id === id));
-  navItems.forEach((item) => item.classList.toggle('active', item.dataset.view === id || (id === 'day-detail' && item.dataset.view === 'today')));
+  navItems.forEach((item) => item.classList.toggle('active', item.dataset.view === id));
   document.body.classList.toggle('calendar-visible', id === 'today');
   document.body.classList.remove('sidebar-open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   // 숨겨진 상태에서 만든 카카오 지도는 크기가 0이라, 화면이 보일 때 다시 계산해야 한다.
-  if (id === 'day-detail') requestAnimationFrame(() => kakaoMap?.relayout());
+  if (id === 'day-detail') requestAnimationFrame(() => {
+    initializeKakaoMap();
+    kakaoMap?.relayout();
+    window.MapDuleFamily?.updateDayMap();
+  });
   window.MapDuleFamily?.onViewShown(id);
 }
 
