@@ -39,6 +39,42 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function renderProfileAvatar(profile = {}) {
+  const button = document.querySelector('.avatar');
+  if (!button) return;
+  const avatar = typeof profile.avatar === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/i.test(profile.avatar)
+    ? profile.avatar
+    : '';
+  button.replaceChildren();
+  button.classList.toggle('has-photo', Boolean(avatar));
+  if (avatar) {
+    const image = document.createElement('img');
+    image.src = avatar;
+    image.alt = '';
+    button.append(image);
+  } else {
+    button.textContent = String(profile.name || '').trim().slice(0, 1) || 'P';
+  }
+  button.setAttribute('aria-label', `${profile.name || '프로필'} 수정`);
+}
+
+function decodeProfileImage(file) {
+  if (window.createImageBitmap) return window.createImageBitmap(file);
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('사진 파일을 열 수 없습니다.'));
+    };
+    image.src = url;
+  });
+}
+
 function localDateString(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -70,8 +106,7 @@ function clearDemoContent() {
   document.querySelector('#today-title').innerHTML = `오늘, ${month}월 ${today.getDate()}일 <em>(${todayName})</em>`;
   document.querySelector('.status-pill').innerHTML = '<i></i>위치 미연결';
   const profile = readStoredValue(PROFILE_STORAGE_KEY, {});
-  const avatar = document.querySelector('.avatar');
-  avatar.textContent = profile.name?.trim() ? profile.name.trim().slice(0, 1) : 'P';
+  renderProfileAvatar(profile);
 
   document.querySelector('.map-card').innerHTML = `
     <div class="map-grid"></div>
@@ -333,35 +368,285 @@ document.querySelector('[aria-label="알림"]')?.addEventListener('click', () =>
   showModal('알림 센터', familyNotifications || '<p>새로운 알림이 없습니다.</p><p class="modal-note">가족이 출발하거나 도착하면 이곳에 표시됩니다.</p>', '닫기');
 });
 
-document.querySelector('[aria-label="프로필"]')?.addEventListener('click', () => {
-  const profile = readStoredValue(PROFILE_STORAGE_KEY, {});
-  const transportMode = ['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit';
-  showModal('프로필 설정', `
-    <form id="profile-form" class="profile-form">
-      <label class="modal-field">표시 이름<input name="name" type="text" maxlength="40" value="${escapeHtml(profile.name || '')}" placeholder="이름" required></label>
-      <label class="modal-field">집 위치<input name="home" type="text" maxlength="120" value="${escapeHtml(profile.home || '')}" placeholder="집 위치 (선택)"></label>
-      <label class="modal-field">기본 이동 수단<select name="transportMode"><option value="transit" ${transportMode === 'transit' ? 'selected' : ''}>대중교통</option><option value="walk" ${transportMode === 'walk' ? 'selected' : ''}>도보</option><option value="car" ${transportMode === 'car' ? 'selected' : ''}>자동차</option></select></label>
-      <p class="modal-note">설정은 이 브라우저에만 저장됩니다.</p>
-    </form>`, '저장', (modal) => {
-    const form = modal.querySelector('#profile-form');
-    if (!form.reportValidity()) return false;
-    const formData = new FormData(form);
+function openProfileEditor() {
+  const stored = readStoredValue(PROFILE_STORAGE_KEY, {});
+  const profile = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  const textValue = (value) => typeof value === 'string' ? value : '';
+  const validAvatar = typeof profile.avatar === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/i.test(profile.avatar)
+    ? profile.avatar
+    : '';
+  const initial = {
+    name: textValue(profile.name).trim(),
+    bio: textValue(profile.bio).trim(),
+    home: textValue(profile.home).trim(),
+    transportMode: ['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit',
+    avatar: validAvatar
+  };
+  let draftAvatar = initial.avatar;
+  let cropImage = null;
+  let cropBaseScale = 1;
+  let cropZoom = 1;
+  let cropOffsetX = 0;
+  let cropOffsetY = 0;
+  let cropDrag = null;
+
+  document.querySelector('.profile-editor-backdrop')?.remove();
+  const modal = document.createElement('div');
+  modal.className = 'profile-editor-backdrop';
+  modal.innerHTML = `
+    <section class="profile-editor" role="dialog" aria-modal="true" aria-labelledby="profile-editor-title">
+      <header class="profile-editor-header">
+        <button class="profile-back-button" type="button" aria-label="뒤로가기"><span class="material-symbols-rounded">arrow_back</span></button>
+        <h2 id="profile-editor-title">프로필 수정</h2>
+        <button class="profile-save-button" type="button">완료</button>
+      </header>
+      <div class="profile-editor-scroll">
+        <section class="profile-photo-section" aria-label="프로필 사진">
+          <button class="profile-photo-button" type="button" aria-label="프로필 사진 변경">
+            <img class="profile-photo-preview" alt="" ${draftAvatar ? `src="${escapeHtml(draftAvatar)}"` : 'hidden'}>
+            <span class="profile-photo-placeholder material-symbols-rounded" ${draftAvatar ? 'hidden' : ''}>person</span>
+            <span class="profile-photo-camera material-symbols-rounded">photo_camera</span>
+          </button>
+          <div class="profile-photo-actions">
+            <span>프로필 사진</span>
+            <button type="button" class="profile-photo-remove" ${draftAvatar ? '' : 'hidden'}>사진 삭제</button>
+          </div>
+          <input class="profile-image-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+        </section>
+        <section class="profile-crop-panel" hidden aria-label="사진 자르기">
+          <h3>사진 자르기</h3>
+          <canvas class="profile-crop-canvas" width="320" height="320" aria-label="사진 위치 조정"></canvas>
+          <p>사진을 끌어 위치를 맞추고 확대 정도를 조정하세요.</p>
+          <label class="profile-crop-zoom">확대<input class="profile-crop-zoom-input" type="range" min="1" max="2.5" step="0.01" value="1"></label>
+          <div class="profile-crop-actions"><button class="profile-crop-cancel" type="button">취소</button><button class="profile-crop-apply" type="button">사진 적용</button></div>
+        </section>
+        <form class="profile-editor-form">
+          <label class="profile-field profile-name-field"><span>닉네임</span><span class="profile-input-wrap"><input name="name" type="text" maxlength="10" inputmode="text" autocomplete="nickname" enterkeyhint="next" value="${escapeHtml(initial.name)}" placeholder="예: 홍길동" aria-describedby="profile-name-help profile-name-count" required><small id="profile-name-count">${[...initial.name].length}/10</small></span><small class="profile-field-help" id="profile-name-help">한글, 영문, 숫자만 10자까지 사용할 수 있어요.</small></label>
+          <label class="profile-field"><span>한 줄 소개</span><textarea name="bio" maxlength="50" rows="2" enterkeyhint="done" placeholder="나를 소개해 주세요">${escapeHtml(initial.bio)}</textarea><small class="profile-char-count"><span class="profile-bio-count">${[...initial.bio].length}</span>/50</small></label>
+          <label class="profile-field"><span>집 위치</span><input name="home" type="text" maxlength="120" value="${escapeHtml(initial.home)}" placeholder="집 위치 (선택)"></label>
+          <label class="profile-field"><span>기본 이동 수단</span><select name="transportMode"><option value="transit" ${initial.transportMode === 'transit' ? 'selected' : ''}>대중교통</option><option value="walk" ${initial.transportMode === 'walk' ? 'selected' : ''}>도보</option><option value="car" ${initial.transportMode === 'car' ? 'selected' : ''}>자동차</option></select></label>
+          <p class="profile-storage-note">프로필은 이 브라우저에 저장됩니다.</p>
+        </form>
+      </div>
+    </section>`;
+  document.body.append(modal);
+
+  const profileButton = document.querySelector('.avatar');
+  const editor = modal.querySelector('.profile-editor');
+  const scrollArea = modal.querySelector('.profile-editor-scroll');
+  const form = modal.querySelector('.profile-editor-form');
+  const nameInput = form.elements.name;
+  const bioInput = form.elements.bio;
+  const nameField = modal.querySelector('.profile-name-field');
+  const nameHelp = modal.querySelector('#profile-name-help');
+  const nameCount = modal.querySelector('#profile-name-count');
+  const bioCount = modal.querySelector('.profile-bio-count');
+  const saveButton = modal.querySelector('.profile-save-button');
+  const photoInput = modal.querySelector('.profile-image-input');
+  const photoPreview = modal.querySelector('.profile-photo-preview');
+  const photoPlaceholder = modal.querySelector('.profile-photo-placeholder');
+  const removePhotoButton = modal.querySelector('.profile-photo-remove');
+  const cropPanel = modal.querySelector('.profile-crop-panel');
+  const cropCanvas = modal.querySelector('.profile-crop-canvas');
+  const cropContext = cropCanvas.getContext('2d');
+  const cropZoomInput = modal.querySelector('.profile-crop-zoom-input');
+  const cropSize = cropCanvas.width;
+  const namePattern = /^[가-힣A-Za-z0-9]{1,10}$/u;
+
+  const currentDraft = () => ({
+    name: nameInput.value.trim(),
+    bio: bioInput.value.trim(),
+    home: form.elements.home.value.trim(),
+    transportMode: form.elements.transportMode.value,
+    avatar: draftAvatar
+  });
+  const hasChanges = () => JSON.stringify(currentDraft()) !== JSON.stringify(initial) || Boolean(cropImage);
+  const validateName = () => {
+    const value = nameInput.value.trim();
+    const valid = namePattern.test(value);
+    nameField.classList.toggle('is-invalid', !valid);
+    nameInput.setAttribute('aria-invalid', String(!valid));
+    nameHelp.textContent = valid
+      ? '한글, 영문, 숫자만 사용할 수 있어요.'
+      : value ? '특수문자와 공백은 사용할 수 없어요. 10자까지 입력해 주세요.' : '닉네임을 입력해 주세요.';
+    nameCount.textContent = `${[...nameInput.value].length}/10`;
+    saveButton.disabled = !valid || !hasChanges() || !cropPanel.hidden;
+  };
+  const updateDirtyState = () => {
+    const valid = namePattern.test(nameInput.value.trim());
+    saveButton.disabled = !valid || !hasChanges() || !cropPanel.hidden;
+    removePhotoButton.hidden = !draftAvatar;
+  };
+  const updatePhotoPreview = () => {
+    if (draftAvatar) {
+      photoPreview.src = draftAvatar;
+      photoPreview.hidden = false;
+      photoPlaceholder.hidden = true;
+    } else {
+      photoPreview.removeAttribute('src');
+      photoPreview.hidden = true;
+      photoPlaceholder.hidden = false;
+    }
+    removePhotoButton.hidden = !draftAvatar;
+  };
+  const closeCropImage = () => {
+    if (typeof cropImage?.close === 'function') cropImage.close();
+    cropImage = null;
+    cropDrag = null;
+  };
+  const closeEditor = () => {
+    closeCropImage();
+    document.removeEventListener('keydown', handleKeydown);
+    modal.remove();
+    profileButton?.focus();
+  };
+  const cancelEditor = () => {
+    if (hasChanges() && !confirm('저장하지 않은 변경사항이 있어요. 닫을까요?')) return;
+    closeEditor();
+  };
+  const drawCrop = () => {
+    if (!cropImage || !cropContext) return;
+    const width = cropImage.width || cropImage.naturalWidth;
+    const height = cropImage.height || cropImage.naturalHeight;
+    const drawWidth = width * cropBaseScale * cropZoom;
+    const drawHeight = height * cropBaseScale * cropZoom;
+    const maxX = Math.max(0, (drawWidth - cropSize) / 2);
+    const maxY = Math.max(0, (drawHeight - cropSize) / 2);
+    cropOffsetX = Math.max(-maxX, Math.min(maxX, cropOffsetX));
+    cropOffsetY = Math.max(-maxY, Math.min(maxY, cropOffsetY));
+    cropContext.fillStyle = '#fff';
+    cropContext.fillRect(0, 0, cropSize, cropSize);
+    cropContext.drawImage(cropImage, (cropSize - drawWidth) / 2 + cropOffsetX, (cropSize - drawHeight) / 2 + cropOffsetY, drawWidth, drawHeight);
+  };
+  const saveProfile = () => {
+    validateName();
+    if (saveButton.disabled) {
+      nameInput.focus();
+      return;
+    }
     const updatedProfile = {
-      name: String(formData.get('name')).trim(),
-      home: String(formData.get('home')).trim(),
-      transportMode: String(formData.get('transportMode'))
+      ...profile,
+      ...currentDraft()
     };
     try {
       localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updatedProfile));
     } catch {
-      showToast('브라우저 저장 공간에 접근할 수 없습니다.', 'info');
-      return false;
+      showToast('사진이 너무 크거나 브라우저 저장 공간이 부족해요.', 'info');
+      return;
     }
-    document.querySelector('.avatar').textContent = updatedProfile.name.slice(0, 1);
+    renderProfileAvatar(updatedProfile);
+    closeEditor();
     showToast('프로필을 저장했습니다.', 'success');
-    return true;
+  };
+  const handleKeydown = (event) => {
+    if (event.key === 'Escape') cancelEditor();
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && event.target === bioInput) saveProfile();
+  };
+
+  nameInput.addEventListener('input', validateName);
+  bioInput.addEventListener('input', () => {
+    bioCount.textContent = String([...bioInput.value].length);
+    updateDirtyState();
   });
-});
+  form.elements.home.addEventListener('input', updateDirtyState);
+  form.elements.transportMode.addEventListener('change', updateDirtyState);
+  form.addEventListener('focusin', (event) => {
+    if (!event.target.matches('input, textarea, select')) return;
+    setTimeout(() => event.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 200);
+  });
+  modal.querySelector('.profile-back-button').addEventListener('click', cancelEditor);
+  modal.querySelector('.profile-save-button').addEventListener('click', saveProfile);
+  modal.querySelector('.profile-photo-button').addEventListener('click', () => photoInput.click());
+  removePhotoButton.addEventListener('click', () => {
+    draftAvatar = '';
+    updatePhotoPreview();
+    updateDirtyState();
+  });
+  modal.querySelector('.profile-crop-cancel').addEventListener('click', () => {
+    closeCropImage();
+    cropPanel.hidden = true;
+    photoInput.value = '';
+    updateDirtyState();
+  });
+  modal.querySelector('.profile-crop-apply').addEventListener('click', () => {
+    try {
+      draftAvatar = cropCanvas.toDataURL('image/jpeg', 0.88);
+      closeCropImage();
+      cropPanel.hidden = true;
+      photoInput.value = '';
+      updatePhotoPreview();
+      updateDirtyState();
+    } catch {
+      showToast('사진을 자르지 못했어요. 다른 이미지로 다시 시도해 주세요.', 'info');
+    }
+  });
+  cropZoomInput.addEventListener('input', () => {
+    cropZoom = Number(cropZoomInput.value);
+    drawCrop();
+  });
+  cropCanvas.addEventListener('pointerdown', (event) => {
+    if (!cropImage) return;
+    cropDrag = { x: event.clientX, y: event.clientY, offsetX: cropOffsetX, offsetY: cropOffsetY };
+    cropCanvas.setPointerCapture(event.pointerId);
+  });
+  cropCanvas.addEventListener('pointermove', (event) => {
+    if (!cropDrag) return;
+    const bounds = cropCanvas.getBoundingClientRect();
+    cropOffsetX = cropDrag.offsetX + (event.clientX - cropDrag.x) * cropSize / bounds.width;
+    cropOffsetY = cropDrag.offsetY + (event.clientY - cropDrag.y) * cropSize / bounds.height;
+    drawCrop();
+  });
+  cropCanvas.addEventListener('pointerup', () => { cropDrag = null; });
+  cropCanvas.addEventListener('pointercancel', () => { cropDrag = null; });
+  photoInput.addEventListener('change', async () => {
+    const file = photoInput.files?.[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      showToast('JPG, PNG, WEBP 또는 GIF 사진을 선택해 주세요.', 'info');
+      photoInput.value = '';
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      showToast('사진은 8MB 이하로 선택해 주세요.', 'info');
+      photoInput.value = '';
+      return;
+    }
+    try {
+      const image = await decodeProfileImage(file);
+      const width = image.width || image.naturalWidth;
+      const height = image.height || image.naturalHeight;
+      if (!width || !height || width * height > 40000000) {
+        if (typeof image.close === 'function') image.close();
+        showToast('사진 크기가 너무 커요. 더 작은 이미지를 선택해 주세요.', 'info');
+        photoInput.value = '';
+        return;
+      }
+      closeCropImage();
+      cropImage = image;
+      cropBaseScale = Math.max(cropSize / width, cropSize / height);
+      cropZoom = 1;
+      cropOffsetX = 0;
+      cropOffsetY = 0;
+      cropZoomInput.value = '1';
+      cropPanel.hidden = false;
+      drawCrop();
+      updateDirtyState();
+      cropPanel.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch {
+      showToast('사진 파일을 열 수 없습니다.', 'info');
+      photoInput.value = '';
+    }
+  });
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) cancelEditor();
+  });
+  document.addEventListener('keydown', handleKeydown);
+  validateName();
+  updatePhotoPreview();
+  requestAnimationFrame(() => nameInput.focus());
+}
+
+document.querySelector('.avatar')?.addEventListener('click', openProfileEditor);
 
 const dateTitle = document.querySelector('#today-title');
 const dateButtons = [...document.querySelectorAll('.week-strip button')];
@@ -1252,6 +1537,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
         if (backup.profile && typeof backup.profile === 'object' && !Array.isArray(backup.profile)) {
           try {
             localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(backup.profile));
+            renderProfileAvatar(backup.profile);
           } catch {
             showToast('일정은 복원했지만 프로필 저장에는 실패했습니다.', 'info');
           }
@@ -1281,7 +1567,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
       manualEventForm.elements.date.value = localDateString(selectedDate);
       manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
       manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
-      document.querySelector('.avatar').textContent = 'P';
+      renderProfileAvatar({});
       setSelectedDate(selectedDate);
       showToast('일정과 프로필을 삭제했습니다.');
       return true;
