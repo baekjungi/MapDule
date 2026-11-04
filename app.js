@@ -140,10 +140,13 @@ function clearDemoContent() {
   aiCta.textContent = '분석된 일정이 없습니다';
   document.querySelector('.manual-link').textContent = '오늘 화면으로 돌아가기';
 
-  document.querySelector('.midpoint-hero h2').innerHTML = '출발 위치를 입력하면<br>중간지점을 찾아드려요';
-  document.querySelector('.midpoint-hero p').textContent = '참가자들의 위치를 추가하면 이동 시간 비교가 시작됩니다.';
+  document.querySelector('#midpoint-title').textContent = '약속 지점';
+  document.querySelector('#midpoint .section-heading p').textContent = '실제 교통 경로 API 연결 후 이용할 수 있어요.';
+  document.querySelector('.midpoint-hero h2').textContent = '중간 지점 계산은 준비 중이에요';
+  document.querySelector('.midpoint-hero p').textContent = '공정한 이동 시간 비교에는 실제 대중교통·도로 경로 데이터가 필요해요.';
+  document.querySelector('#midpoint .primary-cta')?.remove();
   document.querySelector('.demo-result').outerHTML = `
-    <div class="empty-state panel"><span class="material-symbols-rounded">group_add</span><h2>아직 참가 위치가 없어요</h2><p>참가자의 출발 위치를 추가해 주세요.</p></div>
+    <div class="empty-state panel"><span class="material-symbols-rounded">route</span><h2>실제 경로 계산이 아직 연결되지 않았어요</h2><p>교통 경로 API가 준비되면 참가자별 이동 시간과 중간 장소를 비교할 수 있어요.</p><button class="primary-cta" type="button" data-view="day-detail"><span class="material-symbols-rounded">map</span>오늘 지도 보기</button></div>
   `;
 
   const manualView = document.createElement('section');
@@ -177,15 +180,10 @@ function clearDemoContent() {
       </div>
     </section>
   `;
-  document.querySelector('.ai-brief').before(manualView);
+  document.querySelector('.bottom-nav').before(manualView);
 
   views = [...document.querySelectorAll('.view')];
   navItems = [...document.querySelectorAll('.nav-item')];
-
-  document.querySelector('.ai-brief small').textContent = '일정을 추가하면 이동 안내를 표시합니다.';
-  const quickRoute = document.querySelector('.ai-brief button');
-  quickRoute.textContent = '일정 추가';
-  quickRoute.dataset.view = 'ai';
 
   return weekDates;
 }
@@ -512,6 +510,14 @@ function openProfileEditor() {
           <label class="profile-field"><span>기본 이동 수단</span><select name="transportMode"><option value="transit" ${initial.transportMode === 'transit' ? 'selected' : ''}>대중교통</option><option value="walk" ${initial.transportMode === 'walk' ? 'selected' : ''}>도보</option><option value="car" ${initial.transportMode === 'car' ? 'selected' : ''}>자동차</option></select></label>
           <p class="profile-storage-note">프로필은 이 브라우저에 저장됩니다.</p>
         </form>
+        <section class="profile-data-tools" aria-label="일정 데이터 관리">
+          <div><h3>내 일정 데이터</h3><p>이 브라우저의 일정을 백업하거나 다른 캘린더로 내보낼 수 있어요.</p></div>
+          <div class="profile-data-actions">
+            <button type="button" data-profile-export><span class="material-symbols-rounded">download</span>JSON 백업</button>
+            <button type="button" data-profile-import><span class="material-symbols-rounded">upload</span>백업 복원</button>
+            <button type="button" data-profile-calendar-export><span class="material-symbols-rounded">calendar_month</span>캘린더 파일</button>
+          </div>
+        </section>
       </div>
     </section>`;
   document.body.append(modal);
@@ -641,6 +647,24 @@ function openProfileEditor() {
   });
   modal.querySelector('.profile-back-button').addEventListener('click', cancelEditor);
   modal.querySelector('.profile-save-button').addEventListener('click', saveProfile);
+  modal.querySelector('[data-profile-export]').addEventListener('click', () => {
+    if (hasChanges()) {
+      showToast('먼저 프로필 변경사항을 저장해 주세요.', 'info');
+      return;
+    }
+    document.querySelector('#export-backup')?.click();
+  });
+  modal.querySelector('[data-profile-import]').addEventListener('click', () => {
+    if (hasChanges()) {
+      showToast('먼저 프로필 변경사항을 저장해 주세요.', 'info');
+      return;
+    }
+    closeEditor();
+    document.querySelector('#backup-file')?.click();
+  });
+  modal.querySelector('[data-profile-calendar-export]').addEventListener('click', () => {
+    document.querySelector('#export-ics')?.click();
+  });
   modal.querySelector('.profile-photo-button').addEventListener('click', () => photoInput.click());
   removePhotoButton.addEventListener('click', () => {
     draftAvatar = '';
@@ -1678,43 +1702,6 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
 document.querySelector('.map-location-button')?.addEventListener('click', showCurrentLocation);
 
-document.querySelector('.location-box button')?.addEventListener('click', () => {
-  showToast('예약된 일정이 없습니다.');
-});
-
-document.querySelector('.risk-footer button')?.addEventListener('click', () => {
-  showToast('이동 경로를 계산할 일정이 없습니다.');
-});
-
-document.querySelector('.ai-brief button')?.addEventListener('click', () => showView('ai'));
-
-document.querySelector('.accept-quest')?.addEventListener('click', (event) => {
-  event.currentTarget.textContent = '일정에 담김 ✓';
-  event.currentTarget.disabled = true;
-  event.currentTarget.nextElementSibling.textContent = '추가됨';
-});
-
-document.querySelector('.skip-quest')?.addEventListener('click', (event) => {
-  const card = event.currentTarget.closest('.quest-card');
-  card.parentElement.style.display = 'none';
-});
-
-const dinnerRecommendation = document.querySelector('#dinner-recommendation');
-document.querySelector('#add-dinner')?.addEventListener('click', (event) => {
-  dinnerRecommendation.classList.toggle('hidden');
-  const added = !dinnerRecommendation.classList.contains('hidden');
-  event.currentTarget.innerHTML = added
-    ? '<span class="material-symbols-rounded">check</span>식사 일정 반영됨'
-    : '<span class="material-symbols-rounded">restaurant</span>중간 저녁 식사 추가';
-});
-
-document.querySelector('#keep-original')?.addEventListener('click', () => {
-  dinnerRecommendation.classList.add('hidden');
-  const addButton = document.querySelector('#add-dinner');
-  addButton.innerHTML = '<span class="material-symbols-rounded">restaurant</span>중간 저녁 식사 추가';
-  showToast('원래 일정 그대로 등록할게요.');
-});
-
 function setAiAnalysisMessage(message, tone = '') {
   const status = document.querySelector('#ai-analysis-message');
   if (!status) return;
@@ -1873,12 +1860,6 @@ document.querySelector('#ai .primary-cta')?.addEventListener('click', () => {
 });
 
 document.querySelector('.manual-link')?.addEventListener('click', () => showView('today'));
-
-document.querySelector('#midpoint .primary-cta')?.addEventListener('click', () => {
-  showModal('출발 위치 추가', '<label class="modal-field">친구 이름<input placeholder="예: 민수" /></label><label class="modal-field">출발 위치<input placeholder="예: 홍대입구역" /></label>', '위치 추가');
-});
-
-document.querySelector('.secondary-cta')?.addEventListener('click', () => showToast('중간지점을 먼저 계산해 주세요.'));
 
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;
