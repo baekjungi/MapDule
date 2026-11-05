@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { getAiStatus, parseSchedulePrompt } = require('./api/src/ai-schedule');
+const { getAiStatus, parseSchedulePrompt, analyzeSchedulePlan } = require('./api/src/ai-schedule');
 const { handleFamilyRequest } = require('./api/src/family-runtime');
 
 const root = __dirname;
@@ -49,7 +49,8 @@ function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     ...securityHeaders,
     'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    ...(statusCode === 429 ? { 'Retry-After': '60' } : {})
   });
   response.end(JSON.stringify(payload));
 }
@@ -102,6 +103,32 @@ async function parseSchedule(request, response) {
   }
 }
 
+async function analyzeSchedule(request, response) {
+  if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
+    sendJson(response, 415, { error: '요청 Content-Type은 application/json이어야 합니다.' });
+    return;
+  }
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: error.message });
+    return;
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    sendJson(response, 400, { error: '요청 본문 형식이 올바르지 않습니다.', code: 'INVALID_REQUEST' });
+    return;
+  }
+  try {
+    sendJson(response, 200, await analyzeSchedulePlan(body));
+  } catch (error) {
+    sendJson(response, error.statusCode || 500, {
+      error: error.message,
+      ...(error.code ? { code: error.code } : {})
+    });
+  }
+}
+
 async function familyRoute(request, response, action, requestUrl) {
   let body = {};
   if (request.method === 'POST') {
@@ -130,7 +157,8 @@ async function familyRoute(request, response, action, requestUrl) {
       clientKey: request.socket.remoteAddress
     }, { localFilePath: localFamilyDataFile });
     sendJson(response, result.status, result.body);
-  } catch {
+  } catch (error) {
+    console.error(`Family request failed (${error.code || error.cause?.code || 'UNKNOWN'}).`);
     sendJson(response, 500, { error: '가족 서버에서 오류가 발생했습니다.' });
   }
 }
@@ -167,6 +195,10 @@ const server = http.createServer(async (request, response) => {
   }
   if (requestUrl.pathname === '/api/ai/parse' && request.method === 'POST') {
     await parseSchedule(request, response);
+    return;
+  }
+  if (requestUrl.pathname === '/api/ai/plan' && request.method === 'POST') {
+    await analyzeSchedule(request, response);
     return;
   }
   const familyMatch = requestUrl.pathname.match(/^\/api\/family\/([a-z-]+)$/);

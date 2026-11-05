@@ -20,6 +20,40 @@ const calendarGroups = [
   { id: 'other', name: '기타', color: '#c16fc3', categories: ['기타'] }
 ];
 
+async function readAiResponse(response) {
+  const authPage = response.redirected && /\/\.auth\//.test(new URL(response.url).pathname);
+  if (response.status === 401 || response.status === 403 || authPage) {
+    throw Object.assign(new Error('AI 기능을 사용하려면 Microsoft 계정으로 로그인해 주세요.'), { code: 'AI_LOGIN_REQUIRED' });
+  }
+  const contentType = response.headers.get('content-type') || '';
+  if (!/^application\/(?:json|[\w.-]+\+json)(?:\s*;|$)/i.test(contentType)) {
+    throw Object.assign(new Error('AI 서버가 올바른 응답을 보내지 않았어요. 잠시 후 다시 시도해 주세요.'), { code: 'AI_INVALID_RESPONSE' });
+  }
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw Object.assign(new Error('AI 서버 응답을 읽지 못했어요. 잠시 후 다시 시도해 주세요.'), { code: 'AI_INVALID_RESPONSE' });
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    throw Object.assign(new Error('AI 서버 응답 형식이 올바르지 않아요. 잠시 후 다시 시도해 주세요.'), { code: 'AI_INVALID_RESPONSE' });
+  }
+  if (!response.ok) {
+    throw Object.assign(new Error(typeof result.error === 'string' ? result.error : 'AI 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.'), {
+      code: typeof result.code === 'string' ? result.code : 'AI_REQUEST_FAILED'
+    });
+  }
+  return result;
+}
+
+function appendAiSignInLink(container, view = 'ai') {
+  if (!container) return;
+  const link = document.createElement('a');
+  link.href = `/.auth/login/aad?post_login_redirect_uri=${encodeURIComponent(`${location.pathname}#${view}`)}`;
+  link.textContent = 'Microsoft 계정으로 로그인';
+  container.append(' ', link);
+}
+
 function readStoredValue(key, fallback) {
   try {
     const value = localStorage.getItem(key);
@@ -129,6 +163,14 @@ function clearDemoContent() {
     <div class="prompt-actions"><span class="voice-pill"><span class="material-symbols-rounded">info</span>분석 결과를 확인한 뒤 캘린더에 등록합니다</span><button class="link-button" id="analyze-prompt" type="button"><span class="material-symbols-rounded">auto_awesome</span>AI로 일정 분석</button></div>
     <p id="ai-analysis-message" class="ai-analysis-message" role="status" aria-live="polite"></p>
   `;
+  document.querySelector('.prompt-card').insertAdjacentHTML('afterend', `
+    <section class="ai-plan-launch panel">
+      <div><h2><span class="material-symbols-rounded">calculate</span>저장된 일정 계산</h2><p>선택한 날짜의 일정 간격, 위치 기반 이동 예상과 휴식 여유를 분석합니다.</p></div>
+      <button id="analyze-day-plan" type="button"><span class="material-symbols-rounded">auto_awesome</span>일정 계산</button>
+    </section>
+    <section id="ai-plan-result" class="ai-plan-result panel" role="status" aria-live="polite" hidden></section>
+  `);
+  document.querySelector('#analyze-day-plan')?.addEventListener('click', analyzeSelectedDayPlan);
   document.querySelector('.section-title small').textContent = '일정 분석 후 표시됩니다';
   document.querySelector('.ai-stack').innerHTML = `
     <div class="empty-state panel"><span class="material-symbols-rounded">event_note</span><h2>분석된 일정이 없습니다</h2><p>일정 문장을 입력해 주세요. AI 연동 후 구조화된 일정과 이동 시간을 이곳에서 확인할 수 있습니다.</p></div>
@@ -1504,6 +1546,71 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     window.MapDuleFamily?.updateDayMap();
   }
 
+  async function analyzeSelectedDayPlan(event) {
+    const button = event.currentTarget;
+    const panel = document.querySelector('#ai-plan-result');
+    const date = localDateString(selectedDate);
+    const events = eventsForDate(date);
+    if (!events.length) {
+      panel.hidden = false;
+      panel.innerHTML = '<p class="ai-plan-empty">선택한 날짜에 분석할 일정이 없습니다. 먼저 일정을 등록해 주세요.</p>';
+      return;
+    }
+
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    panel.hidden = false;
+    panel.innerHTML = '<div class="ai-plan-loading"><span class="material-symbols-rounded">progress_activity</span><span>Azure OpenAI가 일정 간격과 이동 여유를 계산하고 있어요.</span></div>';
+    try {
+      const profile = readStoredValue(PROFILE_STORAGE_KEY, {});
+      const response = await fetch('/api/ai/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date,
+          transportMode: ['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit',
+          events: events.map((item) => ({
+            id: item.id,
+            title: item.title,
+            date: item.date,
+            startTime: item.startTime,
+            endTime: item.endTime,
+            allDay: item.allDay === true,
+            location: item.location || '',
+            place: item.place || null
+          }))
+        })
+      });
+      const result = await readAiResponse(response);
+
+      const statusLabels = { ok: '이동 여유 있음', 'short-buffer': '여유 15분 미만', tight: '이동 시간 부족', conflict: '일정 시간 겹침', unknown: '이동 거리 미계산' };
+      const transitions = Array.isArray(result.transitions) ? result.transitions : [];
+      const recommendations = Array.isArray(result.recommendations) ? result.recommendations : [];
+      const assumptions = Array.isArray(result.assumptions) ? result.assumptions : [];
+      const distanceLabel = (meters) => meters === null ? '좌표 미등록' : meters < 1000 ? `${Math.round(meters)}m 직선거리` : `${(meters / 1000).toFixed(1)}km 직선거리`;
+      const transitionMarkup = transitions.map((item) => {
+        const gapLabel = item.gapMinutes < 0 ? `일정이 ${Math.abs(item.gapMinutes)}분 겹쳐요` : `일정 사이 ${item.gapMinutes}분`;
+        const travelLabel = item.travelMinutes === null
+          ? '위치 좌표가 없어 이동 시간은 계산하지 않았어요'
+          : `이동 ${item.travelMinutes}분 AI 추정 · ${item.bufferMinutes < 0 ? `약 ${Math.abs(item.bufferMinutes)}분 부족` : `이동 후 ${item.bufferMinutes}분 여유`}${item.recommendedDepartureTime ? ` · 권장 출발 ${item.recommendedDepartureTime}` : ''}`;
+        return `<article class="ai-plan-transition ${escapeHtml(item.status)}"><header><b>${escapeHtml(item.fromTitle)} → ${escapeHtml(item.toTitle)}</b><span>${escapeHtml(statusLabels[item.status] || '확인 필요')}</span></header><p>${gapLabel} · ${travelLabel}</p><small>${distanceLabel(item.straightLineDistanceMeters)} · ${escapeHtml(item.reason)}</small></article>`;
+      }).join('');
+      panel.innerHTML = `
+        <header class="ai-plan-result-header"><div><span class="ai-plan-eyebrow">AZURE OPENAI 일정 분석</span><h2>${escapeHtml(date)} 일정 계산</h2></div><span class="material-symbols-rounded">task_alt</span></header>
+        <p class="ai-plan-summary">${escapeHtml(result.summary || '계산 결과를 확인해 주세요.')}</p>
+        ${transitions.length ? `<div class="ai-plan-transitions">${transitionMarkup}</div>` : '<p class="ai-plan-empty">시간이 정해진 일정이 2개 이상 있어야 일정 간 이동 여유를 계산할 수 있어요.</p>'}
+        ${recommendations.length ? `<section class="ai-plan-recommendations"><h3>추천</h3><ul>${recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></section>` : ''}
+        ${assumptions.length ? `<p class="ai-plan-assumptions">${assumptions.map((item) => escapeHtml(item)).join(' · ')}</p>` : ''}
+      `;
+    } catch (error) {
+      panel.innerHTML = `<div class="ai-plan-error"><b>일정을 계산하지 못했어요.</b><p>${escapeHtml(error.message || 'AI 서버 연결 상태를 확인해 주세요.')}</p></div>`;
+      if (error.code === 'AI_LOGIN_REQUIRED') appendAiSignInLink(panel.querySelector('.ai-plan-error'), 'day-detail');
+    } finally {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
+
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-event]');
     if (editButton) {
@@ -1714,8 +1821,7 @@ async function refreshAzureOpenAiStatus() {
   if (!badge) return;
   try {
     const response = await fetch('/api/ai/status');
-    const status = await response.json();
-    if (!response.ok) throw new Error(status.error || 'AI 설정 상태를 확인하지 못했습니다.');
+    const status = await readAiResponse(response);
     if (!status.configured) {
       badge.textContent = '서버 설정 필요';
       badge.className = 'tag slate';
@@ -1724,23 +1830,15 @@ async function refreshAzureOpenAiStatus() {
     }
 
     if (status.authRequired) {
-      let identity = null;
-      try {
-        const identityResponse = await fetch('/.auth/me');
-        if (identityResponse.ok) identity = await identityResponse.json();
-      } catch {
-        identity = null;
-      }
+      const identityResponse = await fetch('/.auth/me');
+      const identity = await readAiResponse(identityResponse);
       const authenticated = identity?.clientPrincipal?.userRoles?.includes('authenticated');
       if (!authenticated) {
         badge.textContent = '로그인 필요';
         badge.className = 'tag slate';
         const message = document.querySelector('#ai-analysis-message');
         setAiAnalysisMessage('AI 일정 분석은 로그인한 사용자만 사용할 수 있습니다.');
-        const signInLink = document.createElement('a');
-        signInLink.href = '/.auth/login/aad?post_login_redirect_uri=%2F';
-        signInLink.textContent = '로그인';
-        message?.append(' ', signInLink);
+        appendAiSignInLink(message);
         return;
       }
 
@@ -1758,6 +1856,7 @@ async function refreshAzureOpenAiStatus() {
     badge.textContent = 'AI 서버 연결 안 됨';
     badge.className = 'tag coral';
     setAiAnalysisMessage(error.message || 'AI 서버에 연결할 수 없습니다.', 'error');
+    if (error.code === 'AI_LOGIN_REQUIRED') appendAiSignInLink(document.querySelector('#ai-analysis-message'));
   }
 }
 
@@ -1789,8 +1888,7 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt })
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '일정 분석에 실패했습니다.');
+    const result = await readAiResponse(response);
     if (!Array.isArray(result.events) || result.events.length === 0) {
       throw new Error('문장에서 등록할 일정을 찾지 못했습니다. 날짜와 할 일을 포함해 다시 입력해 주세요.');
     }
@@ -1818,6 +1916,13 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
     `;
     document.querySelector('.section-title small').textContent = '분석 실패';
     setAiAnalysisMessage(error.message || '일정 분석에 실패했습니다.', 'error');
+    if (error.code === 'AI_LOGIN_REQUIRED') {
+      const badge = document.querySelector('#azure-ai-status');
+      badge.textContent = '로그인 필요';
+      badge.className = 'tag slate';
+      appendAiSignInLink(document.querySelector('#ai-analysis-message'));
+      appendAiSignInLink(document.querySelector('.ai-stack .empty-state p'));
+    }
     showToast(error.message || '일정 분석에 실패했습니다.', 'info');
   } finally {
     button.disabled = false;

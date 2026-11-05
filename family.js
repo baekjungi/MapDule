@@ -1,3 +1,215 @@
+// MapDule 가족방 채팅
+(() => {
+  const EMOJIS = [
+    ['\u{1F600}', '웃음'], ['\u{1F602}', '크게 웃음'], ['\u{1F60D}', '반했어요'],
+    ['\u{1F44D}', '좋아요'], ['\u{1F44F}', '박수'], ['\u{1F64F}', '고마워요'],
+    ['\u2764\uFE0F', '하트'], ['\u{1F389}', '축하'], ['\u{1F44B}', '인사'],
+    ['\u{1F3E0}', '집'], ['\u{1F697}', '자동차'], ['\u{1F35A}', '밥']
+  ];
+  let current = null;
+
+  function dispose() {
+    if (!current) return;
+    clearTimeout(current.timer);
+    current.node.remove();
+    current = null;
+  }
+
+  function mount(slot, { api, familyId, me }) {
+    if (!current || current.familyId !== familyId || current.me !== me) {
+      dispose();
+      const node = document.createElement('section');
+      node.className = 'family-chat panel';
+      node.setAttribute('aria-label', '가족 채팅');
+      node.innerHTML = `
+        <div class="family-chat-heading"><h2><span class="material-symbols-rounded">forum</span>가족 채팅</h2><small>최근 200개 메시지</small></div>
+        <div class="family-chat-log" role="log" aria-label="가족 대화" aria-live="polite" aria-relevant="additions"></div>
+        <div class="family-chat-status" role="status"></div>
+        <button type="button" class="family-chat-retry" hidden>다시 불러오기</button>
+        <form class="family-chat-form">
+          <label class="family-chat-label"><span class="family-chat-label-row"><span>가족에게 메시지</span><small class="family-chat-count" aria-hidden="true">0 / 1,000자</small></span><textarea name="message" rows="2" maxlength="1000" required aria-describedby="family-chat-hint" placeholder="가족에게 메시지를 남겨 보세요"></textarea></label>
+          <div class="family-chat-toolbar"><button type="button" class="family-chat-toggle" aria-expanded="false" aria-controls="family-chat-emoji-picker" aria-label="이모지 선택" title="이모지 선택 · 이스케이프 키로 닫기"><span class="family-chat-emoji">\u{1F600}</span> 이모지</button><small id="family-chat-hint">최대 1,000자 · 엔터로 전송 · 시프트+엔터로 줄바꿈</small><button type="submit" class="family-chat-send" disabled>보내기</button></div>
+          <div class="family-chat-picker" id="family-chat-emoji-picker" role="group" aria-label="간단한 이모지" hidden>${EMOJIS.map(([emoji, label]) => `<button type="button" class="family-chat-emoji" data-chat-emoji="${emoji}" aria-label="${label}">${emoji}</button>`).join('')}</div>
+        </form>`;
+      const session = {
+        node, api, familyId, me, messages: [], loaded: false, loading: false, sending: false,
+        timer: null, signature: '', pollError: '', sendError: ''
+      };
+      current = session;
+      const input = node.querySelector('textarea');
+      const form = node.querySelector('form');
+      const toggle = node.querySelector('.family-chat-toggle');
+      const picker = node.querySelector('.family-chat-picker');
+      toggle.addEventListener('click', () => {
+        picker.hidden = !picker.hidden;
+        toggle.setAttribute('aria-expanded', String(!picker.hidden));
+      });
+      picker.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-chat-emoji]');
+        if (!button) return;
+        const emoji = button.dataset.chatEmoji;
+        if (input.value.length - (input.selectionEnd - input.selectionStart) + emoji.length > input.maxLength) {
+          session.sendError = '메시지는 1,000자까지 입력할 수 있어요.';
+          updateStatus(session);
+          return;
+        }
+        input.setRangeText(emoji, input.selectionStart, input.selectionEnd, 'end');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      });
+      input.addEventListener('input', () => {
+        session.sendError = '';
+        updateStatus(session);
+      });
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+          event.preventDefault();
+          if (!session.sending && input.value.trim()) form.requestSubmit();
+        }
+      });
+      node.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || picker.hidden) return;
+        event.preventDefault();
+        event.stopPropagation();
+        picker.hidden = true;
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.focus();
+      });
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        send(session);
+      });
+      node.querySelector('.family-chat-retry').addEventListener('click', () => refresh(session));
+    }
+    slot.replaceWith(current.node);
+    if (!current.timer && !current.loading) refresh(current);
+  }
+
+  function updateStatus(session) {
+    const status = session.node.querySelector('.family-chat-status');
+    const hasError = Boolean(session.sendError || session.pollError);
+    const text = session.sendError || session.pollError
+      || (session.sending ? '보내는 중…' : session.loaded ? '새 메시지를 자동으로 확인해요.' : '대화를 불러오는 중…');
+    status.classList.toggle('is-error', hasError);
+    status.setAttribute('role', hasError ? 'alert' : 'status');
+    if (status.textContent !== text) status.textContent = text;
+    session.node.querySelector('.family-chat-retry').hidden = !session.pollError;
+    const input = session.node.querySelector('textarea');
+    const button = session.node.querySelector('[type="submit"]');
+    button.disabled = session.sending || !input.value.trim();
+    button.textContent = session.sending ? '보내는 중…' : '보내기';
+    session.node.querySelector('form').setAttribute('aria-busy', String(session.sending));
+    session.node.querySelector('.family-chat-count').textContent = `${input.value.length.toLocaleString('ko-KR')} / 1,000자`;
+  }
+
+  function renderMessages(session) {
+    const signature = JSON.stringify(session.messages);
+    if (signature === session.signature) return;
+    session.signature = signature;
+    const log = session.node.querySelector('.family-chat-log');
+    const atBottom = !session.loaded || log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    const scrollTop = log.scrollTop;
+    const fragment = document.createDocumentFragment();
+    if (!session.messages.length) {
+      const empty = document.createElement('p');
+      empty.className = 'family-chat-empty';
+      empty.textContent = '아직 대화가 없어요. 첫 인사를 남겨 보세요!';
+      fragment.append(empty);
+    }
+    for (const message of session.messages) {
+      const item = document.createElement('article');
+      item.className = `family-chat-message${message.senderId === session.me ? ' is-mine' : ''}`;
+      const name = document.createElement('b');
+      name.textContent = message.senderId === session.me ? '나' : message.senderName;
+      const text = document.createElement('div');
+      text.className = 'family-chat-text';
+      text.textContent = message.text;
+      const time = document.createElement('time');
+      time.dateTime = message.createdAt;
+      time.textContent = new Date(message.createdAt).toLocaleString('ko-KR', {
+        month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
+      });
+      item.append(name, text, time);
+      fragment.append(item);
+    }
+    log.replaceChildren(fragment);
+    log.scrollTop = atBottom ? log.scrollHeight : scrollTop;
+  }
+
+  function schedule(session) {
+    clearTimeout(session.timer);
+    if (current !== session) return;
+    session.timer = setTimeout(() => {
+      session.timer = null;
+      if (document.visibilityState === 'visible' && session.node.closest('.view.active')) refresh(session);
+      else schedule(session);
+    }, 5000);
+  }
+
+  async function refresh(session) {
+    if (current !== session || session.loading) return;
+    clearTimeout(session.timer);
+    session.timer = null;
+    session.loading = true;
+    const previousMessages = session.messages;
+    updateStatus(session);
+    try {
+      const result = await session.api('messages', { method: 'GET' });
+      if (current !== session) return;
+      // 이전 조회 도중 전송이 끝난 메시지는 유지한다.
+      const addedWhileLoading = session.messages.filter((message) => !previousMessages.some((old) => old.id === message.id));
+      const messages = new Map(result.messages.map((message) => [message.id, message]));
+      for (const message of addedWhileLoading) messages.set(message.id, message);
+      session.messages = [...messages.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(-200);
+      renderMessages(session);
+      session.loaded = true;
+      session.pollError = '';
+    } catch (error) {
+      if (current === session) session.pollError = `대화를 갱신하지 못했어요. ${error.message}`;
+    } finally {
+      session.loading = false;
+      if (current === session) {
+        updateStatus(session);
+        schedule(session);
+      }
+    }
+  }
+
+  async function send(session) {
+    if (current !== session || session.sending) return;
+    const input = session.node.querySelector('textarea');
+    const text = input.value;
+    if (!text.trim()) {
+      session.sendError = '메시지를 입력해 주세요.';
+      updateStatus(session);
+      input.focus();
+      return;
+    }
+    session.sending = true;
+    session.sendError = '';
+    updateStatus(session);
+    try {
+      const { message } = await session.api('message', { body: { text } });
+      if (current !== session) return;
+      session.messages = [...session.messages.filter((item) => item.id !== message.id), message]
+        .sort((a, b) => a.id.localeCompare(b.id)).slice(-200);
+      renderMessages(session);
+      if (input.value === text) input.value = '';
+      const log = session.node.querySelector('.family-chat-log');
+      log.scrollTop = log.scrollHeight;
+    } catch (error) {
+      if (current === session) session.sendError = `메시지를 보내지 못했어요. ${error.message}`;
+    } finally {
+      session.sending = false;
+      if (current === session) {
+        updateStatus(session);
+      }
+    }
+  }
+
+  window.MapDuleFamilyChat = { mount, dispose };
+})();
+
 // MapDule 가족 공유 기능
 // - 초대 코드로 가족 그룹 참여, 가족 공유 일정
 // - '출발' 버튼을 누른 동안에만 위치를 공유하고, 도착하면 자동으로 공유를 끝낸다
@@ -198,6 +410,7 @@
   }
 
   function disconnect(callServer = true) {
+    window.MapDuleFamilyChat?.dispose();
     const previous = credential;
     stopTracking();
     saveCredential('');
@@ -469,7 +682,7 @@
     }).then((position) => {
       const accuracy = position.coords.accuracy;
       if (!Number.isFinite(accuracy) || accuracy > MAX_TRACKING_ACCURACY_METERS) {
-        throw new Error(`위치 정확도가 낮아요${Number.isFinite(accuracy) ? ` (약 ${Math.round(accuracy)}m)` : ''}. GPS 신호가 더 좋은 곳에서 다시 시도해 주세요.`);
+        throw new Error(`위치 정확도가 낮아요${Number.isFinite(accuracy) ? ` (약 ${Math.round(accuracy)}m)` : ''}. 위치 신호가 더 좋은 곳에서 다시 시도해 주세요.`);
       }
       return position;
     });
@@ -971,11 +1184,12 @@
   }
 
   function renderJoined(section) {
+    const chatFocus = section.querySelector('.family-chat :focus');
     const mine = myTrip();
     const sharing = mine?.status === 'moving';
     const estimate = sharing ? estimateTrip(mine) : null;
     const locationAccuracy = Number(mine?.points?.at(-1)?.accuracy);
-    const accuracyLabel = Number.isFinite(locationAccuracy) ? `GPS 정확도 ±${Math.round(locationAccuracy)}m` : 'GPS 정확도 확인 중';
+    const accuracyLabel = Number.isFinite(locationAccuracy) ? `위치 정확도 ±${Math.round(locationAccuracy)}m` : '위치 정확도 확인 중';
     const departures = todaysDepartures();
     const activity = readJson(ACTIVITY_KEY, []).slice(0, 6);
     const canNotify = 'Notification' in window && Notification.permission === 'default';
@@ -1002,6 +1216,7 @@
             </button>`).join('')}</div>` : ''}
           <button type="button" class="secondary-cta" data-free-depart ${busy ? 'disabled' : ''}><span class="material-symbols-rounded">add_location_alt</span>${departures.length ? '다른 곳으로 출발' : '지금 출발 알리기'}</button>`}
       </section>
+      <div class="family-chat-slot"></div>
       <div class="family-map-slot"></div>
       <section class="family-members panel" aria-label="가족 구성원">
         <h2>가족 구성원</h2>
@@ -1023,6 +1238,8 @@
         <button type="button" class="link-button danger" data-leave-family><span class="material-symbols-rounded">logout</span>가족에서 나가기</button>
       </div>
     `;
+    window.MapDuleFamilyChat?.mount(section.querySelector('.family-chat-slot'), { api, familyId: state.family.id, me: me() });
+    if (chatFocus?.isConnected) chatFocus.focus({ preventScroll: true });
     const slot = section.querySelector('.family-map-slot');
     if (mapCard) {
       slot.replaceWith(mapCard);

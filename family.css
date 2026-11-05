@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap');
+
 /* MapDule 가족 공유 화면 */
 :root{--family:#ef7d57;--family-soft:#fff0ea;--family-dark:#c4532f}
 
@@ -163,3 +165,34 @@
 .progress-chip.done{background:#e3f6ec;color:var(--green)}
 .progress-chip.nodata{background:#fff4e0;color:#8a5a00}
 .trip-status.done{background:#e3f6ec;color:var(--green)}
+
+/* 가족방 채팅 */
+.family-chat{padding:18px;margin-bottom:14px;min-width:0}
+.family-chat-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.family-chat-heading>small,.family-chat-toolbar>small{font-size:11px;color:var(--muted)}
+.family-chat-log{height:280px;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:10px;padding:12px 2px;overflow-anchor:none}
+.family-chat-message{align-self:flex-start;max-width:85%;padding:10px 12px;border-radius:14px 14px 14px 3px;background:#f2f3fa;flex-shrink:0;min-width:0}
+.family-chat-message.is-mine{align-self:flex-end;background:var(--family-soft,#fff0ea);border-radius:14px 14px 3px 14px}
+.family-chat-message>b{display:block;font-size:12px;margin-bottom:4px}
+.family-chat-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;font-size:14px;font-family:'Plus Jakarta Sans','Noto Color Emoji',sans-serif}
+.family-chat-message time{display:block;margin-top:5px;font-size:11px;line-height:1.4;color:var(--muted)}
+.family-chat-empty{margin:auto!important;text-align:center}
+.family-chat-status{font-size:12px;color:var(--muted);padding:8px 0;overflow-wrap:anywhere}
+.family-chat-status.is-error{color:#b42318;font-weight:600}
+.family-chat-retry{padding:6px 10px;margin-bottom:8px;background:#f2f3fa;border-radius:8px;color:var(--ink);font:inherit;font-size:12px}
+.family-chat-label{display:grid;gap:6px;font-size:12px;font-weight:700}
+.family-chat-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.family-chat-count{font-size:11px;font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.family-chat-label textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;border:1px solid #dfe1ed;border-radius:12px;padding:10px 12px;font:inherit;font-size:16px;font-weight:400;line-height:1.5;color:var(--ink);background:#fff}
+.family-chat-label textarea:focus{outline:2px solid var(--family,#ef7d57);outline-offset:1px}
+.family-chat-toolbar{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.family-chat-toggle,.family-chat-send{min-height:44px;padding:9px 12px;border-radius:10px;font:inherit;font-size:13px;font-weight:700}
+.family-chat-toggle{background:#f2f3fa;color:var(--ink)}
+.family-chat-send{margin-left:auto;background:var(--family-dark,#c4532f);color:#fff}
+.family-chat-send:disabled{opacity:.55;cursor:not-allowed}
+.family-chat-form[aria-busy="true"] .family-chat-send{cursor:wait}
+.family-chat-emoji{font-family:'Noto Color Emoji','Segoe UI Emoji',sans-serif;font-weight:400}
+.family-chat-picker:not([hidden]){display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.family-chat-picker button{width:44px;height:44px;border-radius:10px;background:#f6f7fb;font-size:24px}
+.family-chat button:focus-visible{outline:2px solid var(--family,#ef7d57);outline-offset:2px}
+@media(max-width:480px){.family-chat{padding:14px}.family-chat-toolbar>small{flex-basis:100%;order:1}.family-chat-message{max-width:90%}}

@@ -6,6 +6,10 @@
     {
       "route": "/api/ai/parse",
       "allowedRoles": ["authenticated"]
+    },
+    {
+      "route": "/api/ai/plan",
+      "allowedRoles": ["authenticated"]
     }
   ],
   "globalHeaders": {

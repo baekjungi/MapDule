@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const server = require('../server');
+const http = require('node:http');
 
 test('serves the app but blocks hidden files and repository metadata', async (context) => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -29,7 +30,9 @@ test('serves the app but blocks hidden files and repository metadata', async (co
     '/server.js',
     '/README.md',
     '/package.json',
-    '/tests/server.test.js'
+    '/tests/server.test.js',
+    '/family-chat.js',
+    '/family-chat.css'
   ]) {
     const response = await fetch(`${baseUrl}${filePath}`);
     assert.equal(response.status, 403, `${filePath} should be blocked`);
@@ -69,4 +72,65 @@ test('serves the local family API with bounded request bodies and member authent
     body: JSON.stringify({ memberName: 'a'.repeat(17_000) })
   });
   assert.equal(oversizedResponse.status, 413);
+});
+
+test('rejects oversized chunked uploads with HTTP 413 instead of resetting the connection', async (context) => {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const status = await new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: '127.0.0.1', port, path: '/api/family/create', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' }
+    }, (response) => {
+      clearInterval(timer);
+      request.end();
+      response.resume();
+      response.on('end', () => resolve(response.statusCode));
+    });
+    request.on('error', reject);
+    let chunks = 0;
+    const timer = setInterval(() => {
+      if (request.destroyed || chunks === 5) {
+        clearInterval(timer);
+        if (!request.destroyed) request.end();
+        return;
+      }
+      request.write('x'.repeat(9000));
+      chunks += 1;
+    }, 10);
+    request.on('close', () => clearInterval(timer));
+  });
+  assert.equal(status, 413);
+});
+
+test('local family rate limits include Retry-After for clients', async (context) => {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  let response;
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    response = await fetch(`http://127.0.0.1:${port}/api/family/join`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberName: 'test', inviteCode: '!' })
+    });
+    await response.json();
+  }
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('retry-after'), '60');
+});
+
+test('local AI schedule plan route validates input before calling Azure OpenAI', async (context) => {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/ai/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: 'not-a-date', events: [] })
+  });
+  const result = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(result.code, 'INVALID_PLAN');
 });

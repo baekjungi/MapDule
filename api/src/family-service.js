@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { createFamilyChat } = require('./family-chat');
 
 // 가족 캘린더와 이동 공유 API의 핵심 로직.
 // Azure Functions(api/src/functions/family.js)와 로컬 server.js가 함께 사용한다.
@@ -14,7 +15,7 @@ const ARRIVAL_RADIUS_METERS = 60;
 const ENDED_TRIP_VISIBLE_MS = 12 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 2 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMITS = { create: 3, join: 8, member: 240 };
+const RATE_LIMITS = { create: 3, join: 8, member: 240, message: 20 };
 const TRAVEL_MODES = new Set(['transit', 'walk', 'car']);
 
 class FamilyError extends Error {
@@ -58,8 +59,8 @@ function isValidTime(value) {
 
 function cleanCoordinate(value) {
   if (!value || typeof value !== 'object') return null;
-  const lat = Number(value.lat);
-  const lng = Number(value.lng);
+  const lat = value.lat;
+  const lng = value.lng;
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   return { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 };
 }
@@ -113,6 +114,7 @@ function publicMember(member) {
 function createFamilyService({ store, now = () => Date.now() }) {
   if (!store) throw new Error('A store is required.');
 
+  const chat = createFamilyChat({ store, now, FamilyError });
   const familyKey = (familyId) => `family:${familyId}`;
   const requestBuckets = new Map();
 
@@ -323,18 +325,21 @@ function createFamilyService({ store, now = () => Date.now() }) {
     if (!Array.isArray(rawPoints)) return [];
     const earliest = Date.parse(startedAt) - 60 * 1000;
     const latest = now() + 60 * 1000;
-    return rawPoints.slice(0, MAX_POINTS_PER_REQUEST).map((point) => {
+    const points = rawPoints.slice(0, MAX_POINTS_PER_REQUEST).map((point) => {
       const coordinate = cleanCoordinate(point);
       const at = Date.parse(point?.at);
       if (!coordinate || !Number.isFinite(at) || at < earliest || at > latest) return null;
-      const accuracy = Number(point.accuracy);
-      if (Number.isFinite(accuracy) && (accuracy < 0 || accuracy > MAX_TRACKING_ACCURACY_METERS)) return null;
+      const accuracy = point.accuracy;
+      if (accuracy !== null && accuracy !== undefined
+        && (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > MAX_TRACKING_ACCURACY_METERS)) return null;
       return {
         ...coordinate,
         at: new Date(at).toISOString(),
         accuracy: Number.isFinite(accuracy) ? Math.round(accuracy) : null
       };
     }).filter(Boolean);
+    return [...new Map(points.map((point) => [point.at, point])).values()]
+      .sort((first, second) => first.at.localeCompare(second.at));
   }
 
   function applyArrival(trip) {
@@ -451,6 +456,8 @@ function createFamilyService({ store, now = () => Date.now() }) {
   };
   const memberActions = {
     'GET state': getState,
+    'GET messages': chat.list,
+    'POST message': chat.send,
     'POST event': saveEvent,
     'POST event-delete': deleteEvent,
     'POST trip-start': startTrip,
@@ -468,6 +475,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     if (memberActions[key]) {
       enforceRateLimit(clientKey, 'member');
       const context = await authenticate(credential);
+      if (key === 'POST message') enforceRateLimit(context.member.id, 'message');
       return key === 'GET state' ? getState(context, query || {}) : memberActions[key](context, body || {});
     }
     throw new FamilyError(404, '가족 API 경로를 찾을 수 없습니다.', 'NOT_FOUND');

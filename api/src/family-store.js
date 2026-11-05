@@ -18,12 +18,29 @@ function createMemoryStore(initialEntries = [], onChange = () => {}) {
       return clone(entries.get(keyOf(partition, row)));
     },
     async put(partition, row, value) {
-      entries.set(keyOf(partition, row), clone(value));
-      onChange(entries);
+      const key = keyOf(partition, row);
+      const existed = entries.has(key);
+      const previous = entries.get(key);
+      entries.set(key, clone(value));
+      try {
+        onChange(entries);
+      } catch (error) {
+        if (existed) entries.set(key, previous);
+        else entries.delete(key);
+        throw error;
+      }
     },
     async remove(partition, row) {
-      entries.delete(keyOf(partition, row));
-      onChange(entries);
+      const key = keyOf(partition, row);
+      const existed = entries.has(key);
+      const previous = entries.get(key);
+      entries.delete(key);
+      try {
+        onChange(entries);
+      } catch (error) {
+        if (existed) entries.set(key, previous);
+        throw error;
+      }
     },
     async list(partition, rowPrefix = '') {
       const prefix = keyOf(partition, rowPrefix);
@@ -41,19 +58,30 @@ function createFileStore(filePath) {
   let initialEntries = [];
   try {
     const saved = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (Array.isArray(saved)) initialEntries = saved;
-  } catch {
-    initialEntries = [];
+    if (!Array.isArray(saved) || !saved.every((entry) => Array.isArray(entry)
+      && entry.length === 2 && typeof entry[0] === 'string' && entry[0].includes('\u0000'))) {
+      throw new Error('Invalid family data structure.');
+    }
+    initialEntries = saved;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error('Could not load family data file.', { cause: error });
   }
   if (process.platform !== 'win32' && fs.existsSync(filePath)) fs.chmodSync(filePath, 0o600);
-  let timer = null;
   const store = createMemoryStore(initialEntries, (entries) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
+    const temporaryFile = `${filePath}.${crypto.randomUUID()}.tmp`;
+    let descriptor;
+    try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(filePath, JSON.stringify([...entries]), { encoding: 'utf8', mode: 0o600 });
-      if (process.platform !== 'win32') fs.chmodSync(filePath, 0o600);
-    }, 200);
+      descriptor = fs.openSync(temporaryFile, 'wx', 0o600);
+      fs.writeFileSync(descriptor, JSON.stringify([...entries]), 'utf8');
+      fs.fsyncSync(descriptor);
+      fs.closeSync(descriptor);
+      descriptor = undefined;
+      fs.renameSync(temporaryFile, filePath);
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+      fs.rmSync(temporaryFile, { force: true });
+    }
   });
   return { ...store, kind: 'file' };
 }
