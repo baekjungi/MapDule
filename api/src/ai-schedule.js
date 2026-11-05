@@ -255,9 +255,10 @@ function formatClockMinutes(value) {
 
 function cleanPlanCoordinate(value) {
   if (!value || typeof value !== 'object') return null;
-  const lat = Number(value.lat);
-  const lng = Number(value.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  const { lat, lng } = value;
+  // Number(null)이나 Number('')는 0이 되어 가짜 좌표(0,0)가 생기므로 숫자 타입만 받는다.
+  if (typeof lat !== 'number' || typeof lng !== 'number'
+    || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   return { lat, lng };
 }
 

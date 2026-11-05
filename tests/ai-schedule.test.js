@@ -240,6 +240,22 @@ test('does not invent travel time when coordinates are missing', async () => {
   assert.ok(result.assumptions.some((item) => item.includes('위치가 없는')));
 });
 
+test('null, empty, boolean or out-of-range coordinates never become a fabricated distance', async () => {
+  const valid = { lat: 37.5, lng: 127 };
+  for (const bad of [{ lat: null, lng: null }, { lat: '', lng: '' }, { lat: true, lng: true }, { lat: undefined, lng: 127 }, { lat: 91, lng: 127 }, { lat: [], lng: [] }, { lat: '37.5', lng: '127' }]) {
+    const result = await analyzeSchedulePlan({
+      date: '2026-11-04',
+      events: [
+        { id: 'one', title: '첫 일정', date: '2026-11-04', startTime: '09:00', endTime: '10:00', location: 'A', place: bad },
+        { id: 'two', title: '다음 일정', date: '2026-11-04', startTime: '11:00', endTime: '12:00', location: 'B', place: valid }
+      ]
+    });
+    assert.equal(result.transitions[0].straightLineDistanceMeters, null, JSON.stringify(bad));
+    assert.equal(result.transitions[0].travelMinutes, null);
+    assert.equal(result.transitions[0].status, 'unknown');
+  }
+});
+
 test('keeps events that cross midnight or lack an end time instead of failing the whole analysis', async () => {
   const previous = {
     endpoint: process.env.AZURE_OPENAI_ENDPOINT,

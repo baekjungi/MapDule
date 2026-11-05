@@ -21,6 +21,17 @@ const calendarGroups = [
   { id: 'other', name: '기타', color: '#c16fc3', categories: ['기타'] }
 ];
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 40000) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    throw Object.assign(new Error(timedOut
+      ? '서버 응답이 너무 오래 걸려요. 잠시 후 다시 시도해 주세요.'
+      : '서버에 연결할 수 없어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.'), { code: timedOut ? 'AI_TIMEOUT' : 'AI_NETWORK' });
+  }
+}
+
 async function readAiResponse(response) {
   const authPage = response.redirected && /\/\.auth\//.test(new URL(response.url).pathname);
   if (response.status === 401 || response.status === 403 || authPage) {
@@ -1651,16 +1662,17 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
     panel.hidden = false;
-    panel.innerHTML = '<div class="ai-plan-loading"><span class="material-symbols-rounded">progress_activity</span><span>Azure OpenAI가 일정 간격과 이동 여유를 계산하고 있어요.</span></div>';
+    panel.innerHTML = '<div class="ai-plan-loading"><span class="material-symbols-rounded">progress_activity</span><span>장소 위치를 확인하고 일정 간격과 이동 여유를 계산하고 있어요.</span></div>';
     try {
       const profile = readStoredValue(PROFILE_STORAGE_KEY, {});
-      const response = await fetch('/api/ai/plan', {
+      const planEvents = await fillMissingPlaces(events);
+      const response = await fetchWithTimeout('/api/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           date,
           transportMode: ['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit',
-          events: events.map((item) => ({
+          events: planEvents.map((item) => ({
             id: item.id,
             title: item.title,
             date: item.date,
@@ -1682,25 +1694,147 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
       const transitionMarkup = transitions.map((item) => {
         const gapLabel = item.gapMinutes < 0 ? `일정이 ${Math.abs(item.gapMinutes)}분 겹쳐요` : `일정 사이 ${item.gapMinutes}분`;
         const travelLabel = item.travelMinutes === null
-          ? '위치 좌표가 없어 이동 시간은 계산하지 않았어요'
-          : `이동 ${item.travelMinutes}분 AI 추정 · ${item.bufferMinutes < 0 ? `약 ${Math.abs(item.bufferMinutes)}분 부족` : `이동 후 ${item.bufferMinutes}분 여유`}${item.recommendedDepartureTime ? ` · 권장 출발 ${item.recommendedDepartureTime}` : ''}`;
+          ? '위치가 없어 이동 시간은 계산하지 않았어요. 일정 장소를 검색해 선택해 주세요.'
+          : `이동 ${item.travelMinutes}분 ${item.routeSource === 'kakao-mobility' ? '실시간 경로' : '추정'} · ${item.bufferMinutes < 0 ? `약 ${Math.abs(item.bufferMinutes)}분 부족` : `이동 후 ${item.bufferMinutes}분 여유`}${item.recommendedDepartureTime ? ` · 권장 출발 ${item.recommendedDepartureTime}` : ''}`;
         return `<article class="ai-plan-transition ${escapeHtml(item.status)}"><header><b>${escapeHtml(item.fromTitle)} → ${escapeHtml(item.toTitle)}</b><span>${escapeHtml(statusLabels[item.status] || '확인 필요')}</span></header><p>${gapLabel} · ${travelLabel}</p><small>${distanceLabel(item.straightLineDistanceMeters)} · ${escapeHtml(item.reason)}</small></article>`;
       }).join('');
+      const reminderTargets = upcomingDepartures(date, transitions);
       panel.innerHTML = `
-        <header class="ai-plan-result-header"><div><span class="ai-plan-eyebrow">AZURE OPENAI 일정 분석</span><h2>${escapeHtml(date)} 일정 계산</h2></div><span class="material-symbols-rounded">task_alt</span></header>
+        <header class="ai-plan-result-header"><div><span class="ai-plan-eyebrow">${result.aiSummary ? 'AZURE OPENAI 일정 분석' : '일정 계산'}</span><h2>${escapeHtml(date)} 일정 계산</h2></div><span class="material-symbols-rounded">task_alt</span></header>
         <p class="ai-plan-summary">${escapeHtml(result.summary || '계산 결과를 확인해 주세요.')}</p>
+        ${result.aiNotice ? `<p class="ai-plan-assumptions">${escapeHtml(result.aiNotice)}</p>` : ''}
         ${transitions.length ? `<div class="ai-plan-transitions">${transitionMarkup}</div>` : '<p class="ai-plan-empty">시간이 정해진 일정이 2개 이상 있어야 일정 간 이동 여유를 계산할 수 있어요.</p>'}
         ${recommendations.length ? `<section class="ai-plan-recommendations"><h3>추천</h3><ul>${recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></section>` : ''}
+        ${reminderTargets.length ? '<section class="ai-plan-recommendations"><h3>출발 알림</h3><button class="link-button" id="enable-departure-reminders" type="button"><span class="material-symbols-rounded">notifications_active</span>출발 시각에 알려 주세요</button><p class="ai-plan-assumptions" id="departure-reminder-status" role="status" aria-live="polite">알림은 이 탭이 열려 있는 동안 동작해요.</p></section>' : ''}
         ${assumptions.length ? `<p class="ai-plan-assumptions">${assumptions.map((item) => escapeHtml(item)).join(' · ')}</p>` : ''}
       `;
+      panel.querySelector('#enable-departure-reminders')?.addEventListener('click', () => {
+        enableDepartureReminders(date, transitions, panel.querySelector('#departure-reminder-status'));
+      });
     } catch (error) {
-      panel.innerHTML = `<div class="ai-plan-error"><b>일정을 계산하지 못했어요.</b><p>${escapeHtml(error.message || 'AI 서버 연결 상태를 확인해 주세요.')}</p></div>`;
+      panel.innerHTML = `<div class="ai-plan-error"><b>일정을 계산하지 못했어요.</b><p>${escapeHtml(error.message || '서버 연결 상태를 확인해 주세요.')}</p><button class="link-button" id="retry-day-plan" type="button"><span class="material-symbols-rounded">refresh</span>다시 계산</button></div>`;
+      panel.querySelector('#retry-day-plan')?.addEventListener('click', () => document.querySelector('#analyze-day-plan')?.click());
       if (error.code === 'AI_LOGIN_REQUIRED') appendAiSignInLink(panel.querySelector('.ai-plan-error'), 'day-detail');
     } finally {
       button.disabled = false;
       button.removeAttribute('aria-busy');
     }
   }
+
+  async function fillMissingPlaces(events) {
+    const geocode = window.MapDuleFamily?.geocode;
+    if (typeof geocode !== 'function') return events;
+    const missing = events.filter((item) => !item.allDay && !item.place && item.location);
+    const found = new Map();
+    await Promise.all(missing.map(async (item) => {
+      try {
+        const place = await geocode(item.location);
+        if (place) found.set(item.id, place);
+      } catch {
+        // 위치를 찾지 못한 일정은 이동 시간 없이 계산한다.
+      }
+    }));
+    if (!found.size) return events;
+    const saved = loadSavedEvents();
+    if (saved.some((item) => found.has(item.id))) {
+      saveEvents(saved.map((item) => found.has(item.id) && !item.place ? { ...item, place: found.get(item.id) } : item));
+    }
+    return events.map((item) => found.has(item.id) ? { ...item, place: found.get(item.id) } : item);
+  }
+
+  const DEPARTURE_REMINDER_KEY = 'mapdule-departure-reminders';
+
+  function clockToMinutes(value) {
+    const [hours, minutes] = String(value).split(':').map(Number);
+    return hours * 60 + minutes;
+  }
+
+  function notifyDeparture(title, body, tag) {
+    if (document.visibilityState === 'visible') {
+      showToast(`${title} ${body}`, 'info');
+      return;
+    }
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try { new Notification(title, { body, tag }); } catch {}
+    }
+  }
+
+  function checkDepartureReminders() {
+    const stored = readStoredValue(DEPARTURE_REMINDER_KEY, null);
+    if (!stored || stored.date !== localDateString(new Date()) || !Array.isArray(stored.items)) return;
+    const now = new Date();
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    let changed = false;
+    for (const item of stored.items) {
+      const start = clockToMinutes(item.startTime);
+      const latestDeparture = start - item.travelMinutes;
+      if (minutes >= start) {
+        if (!item.departed || !item.lateWarned) { item.departed = item.lateWarned = true; changed = true; }
+      } else if (!item.lateWarned && minutes >= latestDeparture) {
+        item.departed = item.lateWarned = true;
+        changed = true;
+        notifyDeparture('지금 출발해야 늦지 않아요.', `${item.title}까지 이동 약 ${item.travelMinutes}분, ${item.startTime} 시작이에요.`, `late-${item.id}`);
+      } else if (!item.departed && minutes >= clockToMinutes(item.departAt)) {
+        item.departed = true;
+        changed = true;
+        notifyDeparture('출발할 시간이에요.', `${item.title}까지 이동 약 ${item.travelMinutes}분, ${item.startTime} 시작이에요.`, `depart-${item.id}`);
+      }
+    }
+    if (changed) {
+      try { localStorage.setItem(DEPARTURE_REMINDER_KEY, JSON.stringify(stored)); } catch {}
+    }
+  }
+
+  function upcomingDepartures(date, transitions) {
+    if (date !== localDateString(new Date())) return [];
+    const now = new Date();
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    return transitions.filter((item) => item.status !== 'conflict'
+      && item.recommendedDepartureTime
+      && clockToMinutes(item.nextStartTime) > minutes);
+  }
+
+  async function enableDepartureReminders(date, transitions, statusElement) {
+    const targets = upcomingDepartures(date, transitions);
+    if (!targets.length) {
+      statusElement.textContent = '아직 지나지 않은 출발 시각이 없어요.';
+      return;
+    }
+    try {
+      localStorage.setItem(DEPARTURE_REMINDER_KEY, JSON.stringify({
+        date,
+        items: targets.map((item) => ({
+          id: item.toId,
+          title: item.toTitle,
+          startTime: item.nextStartTime,
+          departAt: item.recommendedDepartureTime,
+          travelMinutes: item.travelMinutes,
+          departed: false,
+          lateWarned: false
+        }))
+      }));
+    } catch {
+      statusElement.textContent = '브라우저 저장 공간 문제로 출발 알림을 켜지 못했어요.';
+      return;
+    }
+    let permission = 'unsupported';
+    if ('Notification' in window) {
+      permission = Notification.permission;
+      if (permission === 'default') {
+        try { permission = await Notification.requestPermission(); } catch { permission = 'default'; }
+      }
+    }
+    const count = `출발 알림 ${targets.length}개를 켰어요.`;
+    statusElement.textContent = permission === 'granted'
+      ? `${count} 이 탭이 열려 있는 동안 출발 시각에 알려 드려요. 탭을 닫으면 알림이 오지 않아요.`
+      : `${count} 브라우저 알림이 꺼져 있어 앱 화면이 열려 있을 때만 알려 드려요. 알림을 받으려면 주소창의 사이트 정보에서 알림을 허용해 주세요.`;
+    checkDepartureReminders();
+  }
+
+  setInterval(checkDepartureReminders, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkDepartureReminders();
+  });
 
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-event]');
@@ -2016,8 +2150,9 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
   } catch (error) {
     if (promptRevision !== aiPromptRevision) return;
     document.querySelector('.ai-stack').innerHTML = `
-      <div class="empty-state panel"><span class="material-symbols-rounded">error_outline</span><h2>일정을 분석하지 못했어요</h2><p>${escapeHtml(error.message || 'Azure OpenAI 연결 상태를 확인해 주세요.')}</p></div>
+      <div class="empty-state panel"><span class="material-symbols-rounded">error_outline</span><h2>일정을 분석하지 못했어요</h2><p>${escapeHtml(error.message || 'Azure OpenAI 연결 상태를 확인해 주세요.')}</p><button class="link-button" type="button" data-manual-fallback><span class="material-symbols-rounded">edit_calendar</span>직접 입력으로 등록</button></div>
     `;
+    document.querySelector('[data-manual-fallback]')?.addEventListener('click', () => openEventFormModal('create', null, localDateString(selectedDate)));
     document.querySelector('.section-title small').textContent = '분석 실패';
     setAiAnalysisMessage(error.message || '일정 분석에 실패했습니다.', 'error');
     if (error.code === 'AI_LOGIN_REQUIRED') {
