@@ -37,6 +37,7 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 - Invalidate old AI previews and responses when the prompt changes.
 - Include the current family permission, read-state, GPS/notification and repeat-generation regression fixes.
 - Include the server-owned route-estimation module, AI summary fallback and mobile refresh accessibility fixes.
+- Include the completed frontend coordinate resolution and opt-in departure reminder follow-up.
 - Preserve existing changes; deploy the reviewed application files and their tests together without exposing local data or secrets.
 
 ## 5. Validation
@@ -82,13 +83,15 @@ Validation date: 2026-11-05, approximately 22:02-22:05 Asia/Seoul.
 
 ### Current deployment validation
 
-Validated at 2026-11-05T22:10:06+09:00 through the azure-validate workflow.
+Validated at 2026-11-05T22:15:32+09:00 through the azure-validate workflow.
 
 - `npm run check`: passed, including the new route-estimation module.
-- `npm test`: all 91 tests passed, zero failures.
+- `npm test`: all 93 tests passed, zero failures, including ten browser-workflow regressions.
+- The exact isolated workflow-fix app snapshot also passed all 13 targeted workflow/AI response tests.
 - `npm run build`: passed; output contains only the six public browser assets.
 - `git diff --check`: passed; editor diagnostics report no errors in the changed application modules.
 - Existing GitHub Actions workflow and app-specific deployment Secret are present.
-- Last production pipeline for main commit `0b20ccb` succeeded before this update.
+- Production pipeline `42033746494` for integration commit `ea97f8a` succeeded.
+- Follow-up commit `36d212c` completes frontend/server integration and preserves these workflow fixes.
 - No Azure provisioning, SKU, subscription, region, RBAC or secret-value changes are requested.
 - CI will repeat syntax, tests and build against the exact pushed commit before deployment.
