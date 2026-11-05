@@ -583,6 +583,10 @@ function createFamilyService({ store, now = () => Date.now() }) {
     const linkedEvent = typeof body.eventId === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(body.eventId)
       ? await store.get(familyKey(family.id), `event_${body.eventId}`)
       : null;
+    if (body.eventId && !linkedEvent) throw new FamilyError(404, '출발할 일정을 찾을 수 없어요.', 'EVENT_NOT_FOUND');
+    if (linkedEvent?.participants?.length && !linkedEvent.participants.includes(member.id)) {
+      throw new FamilyError(403, '이 일정의 참여자만 출발할 수 있어요.', 'NOT_IN_EVENT');
+    }
     const homeEvent = !linkedEvent && typeof body.returnFor === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(body.returnFor)
       ? await store.get(familyKey(family.id), `event_${body.returnFor}`) : null;
     if (body.returnFor && (!homeEvent?.returnHome || !homeEvent.arrivals?.[member.id] || homeEvent.homeArrivals?.[member.id])) {

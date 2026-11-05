@@ -121,7 +121,7 @@ test('uses the Responses API when the endpoint includes the responses route', as
   }
 });
 
-test('asks Azure OpenAI to estimate travel from real events and validates exact schedule buffers', async () => {
+test('calculates travel on the server and only asks Azure OpenAI to summarize the exact results', async () => {
   const previous = {
     endpoint: process.env.AZURE_OPENAI_ENDPOINT,
     key: process.env.AZURE_OPENAI_API_KEY,
@@ -138,9 +138,8 @@ test('asks Azure OpenAI to estimate travel from real events and validates exact 
     return new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({
         summary: '두 일정 사이에 이동과 짧은 휴식이 가능합니다.',
-        transitions: [{ fromId: 'meeting', toId: 'dinner', travelMinutes: 25, reason: '직선거리와 대중교통 평균 속도를 이용한 추정입니다.' }],
-        recommendations: ['식사 전 35분 여유가 있어요.'],
-        assumptions: ['실시간 교통 정보는 반영되지 않았어요.']
+        recommendations: ['식사 전 여유가 있어요.'],
+        assumptions: []
       }) } }]
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
@@ -156,13 +155,16 @@ test('asks Azure OpenAI to estimate travel from real events and validates exact 
     });
 
     assert.equal(requestBody.model, 'schedule-planner');
-    assert.match(requestBody.messages[1].content, /straightLineDistanceMeters/);
+    assert.match(requestBody.messages[1].content, /"transitions"/);
     assert.equal(result.transitions[0].gapMinutes, 60);
     assert.ok(result.transitions[0].straightLineDistanceMeters > 0);
-    assert.equal(result.transitions[0].travelMinutes, 25);
-    assert.equal(result.transitions[0].bufferMinutes, 35);
-    assert.equal(result.transitions[0].recommendedDepartureTime, '10:25');
+    assert.equal(result.transitions[0].travelMinutes, 4);
+    assert.equal(result.transitions[0].bufferMinutes, 56);
+    assert.equal(result.transitions[0].recommendedDepartureTime, '10:46');
     assert.equal(result.transitions[0].status, 'ok');
+    assert.equal(result.transitions[0].routeSource, 'estimate');
+    assert.equal(result.summary, '두 일정 사이에 이동과 짧은 휴식이 가능합니다.');
+    assert.equal(result.aiSummary, true);
     assert.ok(result.assumptions.some((item) => item.includes('실시간')));
   } finally {
     for (const [key, value] of [
@@ -177,7 +179,68 @@ test('asks Azure OpenAI to estimate travel from real events and validates exact 
   }
 });
 
-test('rejects invalid AI travel results and does not invent time when coordinates are missing', async () => {
+test('still returns exact travel results with a local summary when Azure OpenAI fails or is not configured', async () => {
+  const previous = {
+    endpoint: process.env.AZURE_OPENAI_ENDPOINT,
+    key: process.env.AZURE_OPENAI_API_KEY,
+    deployment: process.env.AZURE_OPENAI_DEPLOYMENT,
+    fetch: global.fetch
+  };
+  const plan = {
+    date: '2026-11-04',
+    transportMode: 'car',
+    events: [
+      { id: 'one', title: '첫 일정', date: '2026-11-04', startTime: '09:00', endTime: '10:00', location: '장소 A', place: { lat: 37.5, lng: 127 } },
+      { id: 'two', title: '다음 일정', date: '2026-11-04', startTime: '10:10', endTime: '11:00', location: '장소 B', place: { lat: 37.56, lng: 127.1 } }
+    ]
+  };
+  try {
+    delete process.env.AZURE_OPENAI_ENDPOINT;
+    delete process.env.AZURE_OPENAI_API_KEY;
+    delete process.env.AZURE_OPENAI_DEPLOYMENT;
+    const local = await analyzeSchedulePlan(plan);
+    assert.equal(local.transitions[0].status, 'tight');
+    assert.ok(local.transitions[0].bufferMinutes < 0);
+    assert.equal(local.aiSummary, false);
+    assert.equal(local.aiNotice, null);
+    assert.match(local.summary, /부족/);
+    assert.ok(local.recommendations.length > 0);
+
+    process.env.AZURE_OPENAI_ENDPOINT = 'https://resource.example';
+    process.env.AZURE_OPENAI_API_KEY = 'test-key';
+    process.env.AZURE_OPENAI_DEPLOYMENT = 'schedule-planner';
+    global.fetch = async () => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); };
+    const failed = await analyzeSchedulePlan(plan);
+    assert.equal(failed.transitions[0].travelMinutes, local.transitions[0].travelMinutes);
+    assert.equal(failed.aiSummary, false);
+    assert.match(failed.aiNotice, /AI 요약/);
+  } finally {
+    for (const [key, value] of [
+      ['AZURE_OPENAI_ENDPOINT', previous.endpoint],
+      ['AZURE_OPENAI_API_KEY', previous.key],
+      ['AZURE_OPENAI_DEPLOYMENT', previous.deployment]
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    global.fetch = previous.fetch;
+  }
+});
+
+test('does not invent travel time when coordinates are missing', async () => {
+  const result = await analyzeSchedulePlan({
+    date: '2026-11-04',
+    events: [
+      { id: 'one', title: '첫 일정', date: '2026-11-04', startTime: '09:00', endTime: '10:00', location: '장소 A' },
+      { id: 'two', title: '다음 일정', date: '2026-11-04', startTime: '10:30', endTime: '11:00', location: '장소 B' }
+    ]
+  });
+  assert.equal(result.transitions[0].travelMinutes, null);
+  assert.equal(result.transitions[0].status, 'unknown');
+  assert.ok(result.assumptions.some((item) => item.includes('위치가 없는')));
+});
+
+test('keeps events that cross midnight or lack an end time instead of failing the whole analysis', async () => {
   const previous = {
     endpoint: process.env.AZURE_OPENAI_ENDPOINT,
     key: process.env.AZURE_OPENAI_API_KEY,
@@ -186,40 +249,27 @@ test('rejects invalid AI travel results and does not invent time when coordinate
   };
   process.env.AZURE_OPENAI_ENDPOINT = 'https://resource.example';
   process.env.AZURE_OPENAI_API_KEY = 'test-key';
-  process.env.AZURE_OPENAI_DEPLOYMENT = 'schedule-planner';
-  let travelMinutes = null;
-  global.fetch = async () => new Response(JSON.stringify({
-    choices: [{ message: { content: JSON.stringify({
-      summary: '위치 좌표가 없어 이동 시간은 계산할 수 없습니다.',
-      transitions: [{ fromId: 'one', toId: 'two', travelMinutes, reason: '장소 좌표가 없습니다.' }],
-      recommendations: [],
-      assumptions: []
-    }) } }]
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-
-  try {
-    const result = await analyzeSchedulePlan({
-      date: '2026-11-04',
-      events: [
-        { id: 'one', title: '첫 일정', date: '2026-11-04', startTime: '09:00', endTime: '10:00', location: '장소 A' },
-        { id: 'two', title: '다음 일정', date: '2026-11-04', startTime: '10:30', endTime: '11:00', location: '장소 B' }
-      ]
-    });
-    assert.equal(result.transitions[0].travelMinutes, null);
-    assert.equal(result.transitions[0].status, 'unknown');
-    assert.ok(result.assumptions.some((item) => item.includes('좌표가 없는')));
-
-    travelMinutes = 500;
-    await assert.rejects(
-      analyzeSchedulePlan({
-        date: '2026-11-04',
+  process.env.AZURE_OPENAI_DEPLOYMENT = 'test-deployment';
+  let calls = 0;
+  global.fetch = async () => {
+    calls += 1;
+    const content = calls === 1
+      ? 'not json'
+      : JSON.stringify({
         events: [
-          { id: 'one', title: '첫 일정', date: '2026-11-04', startTime: '09:00', endTime: '10:00', location: '장소 A', place: { lat: 37.5, lng: 127 } },
-          { id: 'two', title: '다음 일정', date: '2026-11-04', startTime: '10:30', endTime: '11:00', location: '장소 B', place: { lat: 37.51, lng: 127.01 } }
-        ]
-      }),
-      (error) => error.code === 'AZURE_OPENAI_INVALID_PLAN'
-    );
+          { title: '야식', date: '2026-11-04', startTime: '23:30', endTime: '01:00', allDay: false, category: '개인', location: '', notes: '' },
+          { title: '회의', date: '2026-11-04', startTime: '10:00', allDay: false, category: '업무', location: '', notes: '' }
+        ],
+        assumptions: []
+      });
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const result = await parseSchedulePrompt('오늘 밤 11시 반에 야식, 10시 회의');
+    assert.equal(calls, 2);
+    assert.equal(result.events[0].endTime, '23:59');
+    assert.equal(result.events[1].endTime, '11:00');
+    assert.ok(result.assumptions.some((item) => item.includes('맞췄어요')));
   } finally {
     for (const [key, value] of [
       ['AZURE_OPENAI_ENDPOINT', previous.endpoint],

@@ -12,6 +12,15 @@ test('build output contains only browser assets', () => {
   assert.deepEqual(outputFiles, ['app.js', 'family.css', 'family.js', 'index.html', 'staticwebapp.config.json', 'styles.css']);
 });
 
+test('keeps the family refresh control accessible at narrow mobile widths', () => {
+  const projectRoot = path.resolve(__dirname, '..');
+  const html = fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8');
+  const styles = fs.readFileSync(path.join(projectRoot, 'family.css'), 'utf8');
+
+  assert.match(html, /class="sync-button" type="button" aria-label="가족 새로고침" title="가족 새로고침"/);
+  assert.match(styles, /@media\(max-width:360px\)\{\.date-heading \.sync-button\{[^}]*flex:0 0 44px/);
+});
+
 test('family chat ships inside the original family assets with Korean UI', () => {
   const root = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');

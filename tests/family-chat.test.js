@@ -69,7 +69,7 @@ test('concurrent sends are stored in separate records without lost updates', asy
   assert.deepEqual(new Set(messages.map((message) => message.id)), new Set(results.map(({ message }) => message.id)));
 });
 
-test('retains the latest 200 messages and removes chat records when the last member leaves', async () => {
+test('retains the latest 1000 messages and removes chat records when the last member leaves', async () => {
   const { store, service, familyId, first, second, send, list } = await setup();
   const partition = `family:${familyId}`;
   for (let index = 0; index < MAX_MESSAGES + 3; index += 1) {

@@ -1,3 +1,9 @@
+const { distanceMeters, estimateTravel } = require('./route-estimate');
+
+// Static Web Apps 게이트웨이가 약 45초에 요청을 끊으므로 그 전에 안내 가능한 오류로 끝낸다.
+const AI_TIMEOUT_MS = 30_000;
+const AI_NARRATIVE_TIMEOUT_MS = 20_000;
+
 function getAiStatus() {
   return {
     configured: Boolean(
@@ -23,6 +29,12 @@ function getKoreaDate() {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+function getKoreaDateWithWeekday() {
+  const date = getKoreaDate();
+  const weekday = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', weekday: 'long' }).format(new Date());
+  return `${date} (${weekday})`;
+}
+
 function isValidDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T12:00:00Z`);
@@ -34,6 +46,7 @@ function validateExtractedEvents(data) {
     throw new Error('AI returned an invalid event list.');
   }
   const categories = new Set(['약속', '업무', '운동', '개인', '기타']);
+  let adjusted = false;
   const events = data.events.map((event) => {
     if (!event || typeof event !== 'object'
       || typeof event.title !== 'string' || !event.title.trim()
@@ -56,33 +69,43 @@ function validateExtractedEvents(data) {
         notes: event.notes.trim().slice(0, 300)
       };
     }
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.startTime)
-      || !/^([01]\d|2[0-3]):[0-5]\d$/.test(event.endTime)
-      || event.endTime <= event.startTime) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.startTime)) {
       throw new Error('AI returned an invalid event time.');
+    }
+    let endTime = event.endTime;
+    let startTime = event.startTime;
+    if (typeof endTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime) || endTime <= startTime) {
+      // 자정을 넘기거나 종료 시간이 없는 일정은 같은 날 안에서 1시간(최대 23:59)으로 보정한다.
+      let endMinutes = Math.min(clockMinutes(startTime) + 60, 23 * 60 + 59);
+      if (endMinutes <= clockMinutes(startTime)) {
+        startTime = '23:58';
+        endMinutes = 23 * 60 + 59;
+      }
+      endTime = formatClockMinutes(endMinutes);
+      adjusted = true;
     }
     return {
       title: event.title.trim().slice(0, 80),
       date: event.date,
-      startTime: event.startTime,
-      endTime: event.endTime,
+      startTime,
+      endTime,
       allDay: false,
       category: event.category,
       location: event.location.trim().slice(0, 120),
       notes: event.notes.trim().slice(0, 300)
     };
   });
-  return {
-    events,
-    assumptions: Array.isArray(data.assumptions)
-      ? data.assumptions.filter((item) => typeof item === 'string').slice(0, 10)
-      : []
-  };
+  const assumptions = Array.isArray(data.assumptions)
+    ? data.assumptions.filter((item) => typeof item === 'string').slice(0, 10)
+    : [];
+  if (adjusted) assumptions.push('종료 시간이 없거나 시작 시간보다 빠른 일정은 시작 1시간 뒤(최대 23:59)로 맞췄어요. 등록 전에 시간을 확인해 주세요.');
+  return { events, assumptions };
 }
 
 async function requestAzureOpenAIJson(systemMessage, userMessage, temperature = 0.2, {
   invalidResponseCode = 'AZURE_OPENAI_INVALID_RESPONSE',
-  invalidResponseMessage = 'Azure OpenAI가 올바른 구조의 JSON을 반환하지 않았습니다.'
+  invalidResponseMessage = 'Azure OpenAI가 올바른 구조의 JSON을 반환하지 않았습니다.',
+  timeoutMs = AI_TIMEOUT_MS
 } = {}) {
   const { configured } = getAiStatus();
   if (!configured) {
@@ -145,7 +168,7 @@ async function requestAzureOpenAIJson(systemMessage, userMessage, temperature = 
         'api-key': process.env.AZURE_OPENAI_API_KEY
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(45_000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
   } catch (error) {
     const timedOut = error.name === 'TimeoutError' || error.name === 'AbortError';
@@ -199,15 +222,24 @@ async function parseSchedulePrompt(prompt) {
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) {
     throw createAiError(400, '일정 문장을 1~4,000자 사이로 입력해 주세요.', 'INVALID_PROMPT');
   }
-  const systemMessage = `너는 한국어 일정 문장을 캘린더 일정으로 변환하는 도우미다. 기준 날짜는 한국 시간 오늘 ${getKoreaDate()}이다. 상대 날짜(오늘, 내일, 모레, 이번 주 금요일 등)는 이 기준으로 계산한다. 사용자가 명시한 일정만 분리하고, 최대 20개까지 반환한다. 시간이 없으면 오전 9시 시작, 1시간 일정으로 설정하고 assumptions에 그 가정을 알린다. 종료 시간이 없으면 시작 시간부터 1시간으로 설정한다. 종일 여부가 명확할 때만 allDay를 true로 한다. category는 약속, 업무, 운동, 개인, 기타 중 하나다. 모든 문자열은 한국어로 작성한다. 반드시 json 형식의 JSON 객체로만 응답하고 다음 구조를 따른다: {"events":[{"title":"일정 제목","date":"YYYY-MM-DD","startTime":"HH:mm","endTime":"HH:mm","allDay":false,"category":"약속","location":"","notes":""}],"assumptions":[]}. 일정이 없으면 events는 빈 배열이다.`;
-  const data = await requestAzureOpenAIJson(systemMessage, `다음 문장을 json 형식의 일정 데이터로 변환해 주세요.\n\n${prompt.trim()}`, 0.2, {
-    invalidResponseCode: 'AZURE_OPENAI_INVALID_SCHEDULE',
-    invalidResponseMessage: '일정 분석 결과의 형식이 올바르지 않습니다. 문장을 바꿔 다시 분석해 주세요.'
-  });
-  try {
-    return validateExtractedEvents(data);
-  } catch {
-    throw createAiError(502, '일정 분석 결과의 형식이 올바르지 않습니다. 문장을 바꿔 다시 분석해 주세요.', 'AZURE_OPENAI_INVALID_SCHEDULE');
+  const systemMessage = `너는 한국어 일정 문장을 캘린더 일정으로 변환하는 도우미다. 기준 날짜는 한국 시간 오늘 ${getKoreaDateWithWeekday()}이다. 상대 날짜(오늘, 내일, 모레, 이번 주 금요일, 다음 주 월요일 등)는 이 기준으로 계산한다. 일정은 하루 안에서 끝나야 하며 자정을 넘기면 종료를 23:59로 한다. 장소가 문장에 있으면 location에 장소명만 넣는다. 사용자가 명시한 일정만 분리하고, 최대 20개까지 반환한다. 시간이 없으면 오전 9시 시작, 1시간 일정으로 설정하고 assumptions에 그 가정을 알린다. 종료 시간이 없으면 시작 시간부터 1시간으로 설정한다. 종일 여부가 명확할 때만 allDay를 true로 한다. category는 약속, 업무, 운동, 개인, 기타 중 하나다. 모든 문자열은 한국어로 작성한다. 반드시 json 형식의 JSON 객체로만 응답하고 다음 구조를 따른다: {"events":[{"title":"일정 제목","date":"YYYY-MM-DD","startTime":"HH:mm","endTime":"HH:mm","allDay":false,"category":"약속","location":"","notes":""}],"assumptions":[]}. 일정이 없으면 events는 빈 배열이다.`;
+  const userMessage = `다음 문장을 json 형식의 일정 데이터로 변환해 주세요.\n\n${prompt.trim()}`;
+  const invalidScheduleError = () => createAiError(502, '일정 분석 결과의 형식이 올바르지 않습니다. 문장을 바꿔 다시 분석해 주세요.', 'AZURE_OPENAI_INVALID_SCHEDULE');
+  // 형식 오류는 즉시 돌아오므로 한 번만 다시 시도한다. 시간 초과·연결 오류는 재시도하지 않는다.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const data = await requestAzureOpenAIJson(systemMessage, userMessage, 0.2, {
+        invalidResponseCode: 'AZURE_OPENAI_INVALID_SCHEDULE',
+        invalidResponseMessage: invalidScheduleError().message
+      });
+      try {
+        return validateExtractedEvents(data);
+      } catch {
+        throw invalidScheduleError();
+      }
+    } catch (error) {
+      if (attempt >= 2 || error.code !== 'AZURE_OPENAI_INVALID_SCHEDULE') throw error;
+    }
   }
 }
 
@@ -227,15 +259,6 @@ function cleanPlanCoordinate(value) {
   const lng = Number(value.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   return { lat, lng };
-}
-
-function distanceMeters(first, second) {
-  const radians = (degrees) => degrees * Math.PI / 180;
-  const latitudeDelta = radians(second.lat - first.lat);
-  const longitudeDelta = radians(second.lng - first.lng);
-  const arc = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(radians(first.lat)) * Math.cos(radians(second.lat)) * Math.sin(longitudeDelta / 2) ** 2;
-  return Math.round(2 * 6371000 * Math.asin(Math.sqrt(arc)));
 }
 
 function validatePlanInput(body) {
@@ -278,58 +301,71 @@ function validatePlanInput(body) {
   return { date: body.date, transportMode: mode, events };
 }
 
-function validatePlanResponse(data, plan, transitions) {
+function planStatus(gapMinutes, bufferMinutes) {
+  if (gapMinutes < 0) return 'conflict';
+  if (bufferMinutes === null) return 'unknown';
+  return bufferMinutes < 0 ? 'tight' : bufferMinutes < 15 ? 'short-buffer' : 'ok';
+}
+
+function summarizePlanLocally(plan, transitions) {
+  const timedCount = plan.events.filter((event) => !event.allDay).length;
+  if (!transitions.length) {
+    return `시간이 정해진 일정이 ${timedCount}개예요. 일정이 2개 이상이면 일정 사이 이동 여유를 계산해 드려요.`;
+  }
+  const count = (status) => transitions.filter((item) => item.status === status).length;
+  const risky = count('conflict') + count('tight');
+  if (risky) return `일정 사이 ${transitions.length}곳 중 ${risky}곳이 겹치거나 이동 시간이 부족해요.`;
+  if (count('short-buffer')) return `일정 사이 ${transitions.length}곳 중 ${count('short-buffer')}곳은 이동 후 여유가 15분 미만이에요.`;
+  if (count('unknown') === transitions.length) return '장소 위치가 없어 이동 시간은 계산하지 못했어요. 일정 장소를 검색해 선택해 주세요.';
+  return `일정 사이 ${transitions.length}곳 모두 이동할 시간이 충분해요.`;
+}
+
+function recommendPlanLocally(transitions) {
+  const items = [];
+  for (const item of transitions) {
+    if (item.status === 'conflict') {
+      items.push(`'${item.fromTitle}'와 '${item.toTitle}' 일정이 ${Math.abs(item.gapMinutes)}분 겹쳐요. 한쪽 시간을 조정해 주세요.`);
+    } else if (item.status === 'tight') {
+      items.push(`'${item.toTitle}'까지 이동에 약 ${item.travelMinutes}분이 필요해 ${Math.abs(item.bufferMinutes)}분 부족해요. 시작 시간을 늦추거나 '${item.fromTitle}'을 일찍 마치세요.`);
+    } else if (item.status === 'short-buffer') {
+      items.push(`'${item.toTitle}'까지 여유가 ${item.bufferMinutes}분뿐이에요. ${item.recommendedDepartureTime ? `${item.recommendedDepartureTime}에는 출발하세요.` : '서둘러 출발하세요.'}`);
+    }
+  }
+  if (transitions.some((item) => item.status === 'unknown')) {
+    items.push('장소를 검색해 선택하면 일정 사이 이동 시간을 계산할 수 있어요.');
+  }
+  return items.slice(0, 5);
+}
+
+function validatePlanNarrative(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)
     || typeof data.summary !== 'string' || !data.summary.trim()
-    || !Array.isArray(data.transitions) || data.transitions.length !== transitions.length
-    || !Array.isArray(data.recommendations) || data.recommendations.length > 5) {
-    throw createAiError(502, 'AI 일정 계산 결과의 형식이 올바르지 않습니다. 다시 시도해 주세요.', 'AZURE_OPENAI_INVALID_PLAN');
-  }
-  const recommendations = data.recommendations.map((item) => {
-    if (typeof item !== 'string' || !item.trim()) {
-      throw createAiError(502, 'AI 일정 계산 결과에 올바르지 않은 제안이 포함되어 있습니다.', 'AZURE_OPENAI_INVALID_PLAN');
-    }
-    return item.trim().slice(0, 240);
-  });
-  const checkedTransitions = transitions.map((transition, index) => {
-    const result = data.transitions[index];
-    if (!result || result.fromId !== transition.fromId || result.toId !== transition.toId
-      || (result.travelMinutes !== null && (!Number.isInteger(result.travelMinutes) || result.travelMinutes < 0 || result.travelMinutes > 360))
-      || typeof result.reason !== 'string') {
-      throw createAiError(502, 'AI 이동 계산 결과의 형식이 올바르지 않습니다. 다시 시도해 주세요.', 'AZURE_OPENAI_INVALID_PLAN');
-    }
-    const bufferMinutes = result.travelMinutes === null ? null : transition.gapMinutes - result.travelMinutes;
-    let status = 'unknown';
-    if (transition.gapMinutes < 0) status = 'conflict';
-    else if (bufferMinutes !== null) status = bufferMinutes < 0 ? 'tight' : bufferMinutes < 15 ? 'short-buffer' : 'ok';
-    const nextEvent = plan.events.find((event) => event.id === transition.toId);
-    const recommendedDepartureTime = result.travelMinutes === null
-      ? null
-      : formatClockMinutes(clockMinutes(nextEvent.startTime) - result.travelMinutes - 10);
-    return {
-      ...transition,
-      travelMinutes: result.travelMinutes,
-      bufferMinutes,
-      recommendedDepartureTime,
-      status,
-      reason: result.reason.trim().slice(0, 240)
-    };
-  });
-  const assumptions = Array.isArray(data.assumptions)
-    ? data.assumptions.filter((item) => typeof item === 'string').slice(0, 5).map((item) => item.slice(0, 180))
-    : [];
-  assumptions.push('이동 시간은 Azure OpenAI 추정치이며 실시간 도로·대중교통 정보가 아닙니다.');
-  if (transitions.some((item) => item.straightLineDistanceMeters === null)) {
-    assumptions.push('좌표가 없는 일정 사이의 이동 시간은 계산하지 않았습니다.');
+    || !Array.isArray(data.recommendations) || data.recommendations.length > 5
+    || data.recommendations.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw createAiError(502, 'AI 일정 요약의 형식이 올바르지 않습니다.', 'AZURE_OPENAI_INVALID_PLAN');
   }
   return {
+    summary: data.summary.trim().slice(0, 300),
+    recommendations: data.recommendations.map((item) => item.trim().slice(0, 240)),
+    assumptions: Array.isArray(data.assumptions)
+      ? data.assumptions.filter((item) => typeof item === 'string').slice(0, 3).map((item) => item.slice(0, 180))
+      : []
+  };
+}
+
+async function requestPlanNarrative(plan, transitions) {
+  const systemMessage = `너는 한국어 일정 코치다. 오늘 날짜는 ${getKoreaDateWithWeekday()}이다. 입력의 일정과 transitions는 서버가 이미 계산한 정확한 값이다. 숫자(이동시간, 여유, 출발 시각)를 바꾸거나 입력에 없는 일정·장소·교통상황을 지어내지 마라. 일정을 임의로 변경하지 말고, 겹침·이동 시간 부족·여유 부족을 우선해 사용자가 바로 할 행동을 짧게 제안한다. 반드시 json 형식의 JSON 객체로만 응답한다: {"summary":"하루 계획 한두 문장 요약","recommendations":["실행 가능한 제안"],"assumptions":[]}. recommendations는 최대 5개다.`;
+  const userMessage = `다음 계산 결과를 요약하고 제안해 주세요. JSON으로 응답하세요.\n\n${JSON.stringify({
     date: plan.date,
     transportMode: plan.transportMode,
-    summary: data.summary.trim().slice(0, 300),
-    transitions: checkedTransitions,
-    recommendations,
-    assumptions
-  };
+    events: plan.events.map(({ id, title, startTime, endTime, allDay, location }) => ({ id, title, startTime, endTime, allDay, location })),
+    transitions: transitions.map(({ fromTitle, toTitle, gapMinutes, travelMinutes, bufferMinutes, recommendedDepartureTime, status, reason }) => ({ fromTitle, toTitle, gapMinutes, travelMinutes, bufferMinutes, recommendedDepartureTime, status, reason }))
+  })}`;
+  return validatePlanNarrative(await requestAzureOpenAIJson(systemMessage, userMessage, 0.3, {
+    invalidResponseCode: 'AZURE_OPENAI_INVALID_PLAN',
+    invalidResponseMessage: 'AI 일정 요약의 형식이 올바르지 않습니다.',
+    timeoutMs: AI_NARRATIVE_TIMEOUT_MS
+  }));
 }
 
 async function analyzeSchedulePlan(body) {
@@ -352,15 +388,62 @@ async function analyzeSchedulePlan(body) {
       toLocation: next.location
     });
   }
-  const systemMessage = `너는 실제 일정 자료를 계산하는 한국어 일정 분석기다. 오늘 날짜는 ${getKoreaDate()}이다. 입력은 서버가 검증한 일정과 계산한 정확한 일정 간격 및 좌표가 있을 때의 직선거리다. 입력에 없는 일정, 교통상황, 도로경로, 장소 정보를 지어내지 마라. 직선거리는 실제 도로거리가 아니므로 이동시간은 반드시 추정으로 취급한다. 이동시간 추정은 도보 4.5km/h, 대중교통 도심 20km/h·장거리 70km/h, 자동차 도심 25km/h·장거리 85km/h 기준을 사용하고 도심 우회계수 1.3, 장거리 1.15를 적용한다. 대중교통은 거리가 1.5km를 넘으면 환승·대기 5분을 더한다. 좌표 거리가 null이면 travelMinutes는 반드시 null로 반환한다. gapMinutes에서 이동시간을 뺀 여유가 부족하거나 겹치는 일정을 지적한다. 추천은 주어진 일정 안의 실제 간격만 활용하고 일정을 임의로 변경하지 않는다. 모든 응답은 JSON 객체로만 반환한다: {"summary":"하루 계획 요약","transitions":[{"fromId":"입력 ID","toId":"입력 ID","travelMinutes":20,"reason":"근거"}],"recommendations":["실행 가능한 제안"],"assumptions":["가정"]}. transitions는 입력 transitions와 같은 순서와 ID를 사용하고, 거리 null일 때는 travelMinutes:null로 한다.`;
-  const userMessage = `다음 실제 일정 데이터의 시간 간격, 이동 여유, 충돌, 휴식 가능성을 계산해 주세요. JSON으로 응답하세요.\n\n${JSON.stringify({
+  const travels = await Promise.all(transitions.map((transition, index) => {
+    const from = timedEvents[index].place;
+    const to = timedEvents[index + 1].place;
+    return from && to ? estimateTravel(from, to, plan.transportMode) : null;
+  }));
+  const checkedTransitions = transitions.map((transition, index) => {
+    const travel = travels[index];
+    const travelMinutes = travel ? travel.travelMinutes : null;
+    const bufferMinutes = travelMinutes === null ? null : transition.gapMinutes - travelMinutes;
+    return {
+      ...transition,
+      travelMinutes,
+      bufferMinutes,
+      recommendedDepartureTime: travelMinutes === null
+        ? null
+        : formatClockMinutes(clockMinutes(transition.nextStartTime) - travelMinutes - 10),
+      status: planStatus(transition.gapMinutes, bufferMinutes),
+      routeSource: travel ? travel.method : null,
+      reason: travel ? travel.detail : '일정 장소의 위치가 없어 이동 시간을 계산하지 않았어요.'
+    };
+  });
+
+  const assumptions = [];
+  if (checkedTransitions.some((item) => item.routeSource === 'estimate')) {
+    assumptions.push('이동 시간은 직선거리 기반 추정이며 실시간 도로·대중교통 정보가 아니에요.');
+  }
+  if (checkedTransitions.some((item) => item.status === 'unknown')) {
+    assumptions.push('위치가 없는 일정 사이의 이동 시간은 계산하지 않았어요.');
+  }
+  let summary = summarizePlanLocally(plan, checkedTransitions);
+  let recommendations = recommendPlanLocally(checkedTransitions);
+  let aiNotice = null;
+  let aiSummary = false;
+  if (checkedTransitions.length && getAiStatus().configured) {
+    try {
+      const narrative = await requestPlanNarrative(plan, checkedTransitions);
+      summary = narrative.summary;
+      recommendations = narrative.recommendations;
+      assumptions.push(...narrative.assumptions);
+      aiSummary = true;
+    } catch (error) {
+      // 이동 계산은 이미 끝났으므로 AI 요약 실패는 기본 요약으로 대체한다.
+      console.error(`AI plan summary unavailable (${error.code || 'UNKNOWN'}).`);
+      aiNotice = 'AI 요약을 불러오지 못해 기본 계산 결과만 표시해요.';
+    }
+  }
+  return {
     date: plan.date,
     transportMode: plan.transportMode,
-    events: plan.events.map(({ id, title, startTime, endTime, allDay, location }) => ({ id, title, startTime, endTime, allDay, location })),
-    transitions
-  })}`;
-  const result = await requestAzureOpenAIJson(systemMessage, userMessage, 0.1);
-  return validatePlanResponse(result, plan, transitions);
+    summary,
+    transitions: checkedTransitions,
+    recommendations,
+    assumptions,
+    aiSummary,
+    aiNotice
+  };
 }
 
 module.exports = {

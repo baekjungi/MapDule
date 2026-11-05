@@ -4,7 +4,8 @@ Status: Validated
 
 ## 1. Scope and approval
 
-The user requested allowing AI access without a Microsoft account on 2026-11-05.
+The user requested finding and fixing features that look available but do not work on 2026-11-05.
+The latest user request is to deploy the current application update on 2026-11-05.
 Update the existing application only. Preserve the existing design, family chat, Korean UI and server reliability fixes.
 Do not create, delete or reconfigure Azure infrastructure or expose application secrets.
 
@@ -28,10 +29,15 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 
 ## 4. Changes
 
-- Allow anonymous access on AI parse and plan routes and advertise authRequired: false.
-- Keep server-side API keys and existing HTML/JSON error handling.
-- Apply shared per-IP minute/day limits and per-instance concurrency limits to both AI operations.
-- Preserve in-progress family/UI edits made by another agent; deploy only files from this request.
+- Fix event-form validation so corrected times and titles can be saved.
+- Permit place re-search after changing an in-flight query; ignore stale search results.
+- Preserve native keyboard activation on calendar event buttons.
+- Refresh the map when the selected day has no events.
+- Reject malformed backups before any storage changes, without silently importing a subset.
+- Invalidate old AI previews and responses when the prompt changes.
+- Include the current family permission, read-state, GPS/notification and repeat-generation regression fixes.
+- Include the server-owned route-estimation module, AI summary fallback and mobile refresh accessibility fixes.
+- Preserve existing changes; deploy the reviewed application files and their tests together without exposing local data or secrets.
 
 ## 5. Validation
 
@@ -40,61 +46,49 @@ Do not switch to azd, create an environment or generate replacement infrastructu
   - [x] Full regression suite: npm test
   - [x] Public asset build: npm run build
   - [x] Whitespace: git diff --check
-  - [x] Anonymous Functions status/parse/plan and shared request limit tests
+  - [x] Browser workflow, route estimation and family regression tests
   - [x] Existing pipeline and deployment token configuration
   - [x] Static role verification: guest routes enabled; API secrets remain server-side; no Azure RBAC changes
 
 ## 6. Deployment and verification
 
-Commit only the verified guest-access changes, push normally to main and monitor the matching GitHub Actions run.
-Verify production assets and endpoints, then exercise actual unauthenticated AI inference in the browser.
+Commit the verified application update, push normally to main and monitor the matching GitHub Actions run.
+Verify production assets and endpoints, then exercise actual unauthenticated AI inference and corrected form behavior.
 Do not claim successful Azure OpenAI inference unless it has actually been exercised.
 Rollback, if needed, uses a normal revert commit after identifying the failed deployment; no destructive Git commands.
 
 ## 7. Validation Proof
 
-Guest-access validation: 2026-11-05, approximately 21:53 Asia/Seoul.
+Validation date: 2026-11-05, approximately 22:02-22:05 Asia/Seoul.
 
 - `npm run check`, `npm test`, `npm run build`, `git diff --check`: passed.
-- All 70 tests in the shared worktree passed, including five new guest/limiter tests
-  and concurrent family-workflow tests belonging to another agent.
-- Functions tests invoke both operations with no identity/cookie headers and confirm success.
-- Status test confirms `authRequired: false`.
-- Rate-limit tests verify exactly ten calls per minute, 100 per 24 hours, reset windows,
-  shared parse/plan counters, Retry-After, three concurrent operations and release on failure.
-- Existing deployment token name and live Static Web App hostname confirmed without reading secrets.
-- Static review confirms both AI routes explicitly permit the anonymous role, API keys
-  remain on the server and no Azure RBAC or infrastructure changes are included.
-- Concurrent integration commit `29cd16eb53f05e940ae591edc57f1706e10aee9c`
-  included guest access. Its existing GitHub Actions run `42030923252` succeeded.
-- Production verification: unauthenticated status returned HTTP 200 with
-  `configured: true` and `authRequired: false`.
-- Real unauthenticated parse returned HTTP 200 and the requested meeting on
-  2026-11-06, 15:00-16:00; plan returned HTTP 200 with a Korean summary.
-- Browser verification displayed the parsed meeting preview and enabled registration
-  without requiring a login.
+- All 84 tests in the shared worktree passed, including eight new browser-workflow
+  regressions and concurrent family tests. CI will verify the exact committed snapshot.
+- Reproduced invalid-time error surviving a correction before the fix. After the fix,
+  a corrected 15:00-16:00 meeting saved, survived reload and could be edited again.
+- Browser rejected whitespace-only titles and allowed saving after correction.
+- Reproduced place search remaining disabled after editing the query. After the fix,
+  a second query could run and only its results could be selected.
+- Reproduced malformed date/time backup being accepted. After the fix, import displayed
+  a Korean error, opened no restore confirmation and left existing storage unchanged.
+- Browser and unit tests confirmed editing the AI prompt disables stale registration;
+  a delayed response for the old prompt cannot restore the old preview.
+- Unit tests cover leap days, all-day events, duplicate IDs, invalid dates/times/coordinates,
+  nested calendar keyboard handling and map refresh for an empty day.
+- Production Kakao map was created successfully; the local audit origin is not on
+  the configured Kakao domain allowlist, so local place-query race tests use controlled responses.
+- Existing production workflow succeeded for current main. Deployment target/token are
+  unchanged. No infrastructure, Azure RBAC, application roles or API-secret handling changes.
 
-The results below are historical evidence for the preceding deployment.
+### Current deployment validation
 
-Validation date: 2026-11-05, approximately 21:42-21:44 Asia/Seoul.
+Validated at 2026-11-05T22:10:06+09:00 through the azure-validate workflow.
 
-- `npm run check`: passed JavaScript syntax checks.
-- `npm test`: 56 tests passed, zero failures, including three new browser-response regressions.
-- `npm run build`: passed; output remains the six existing public browser assets.
-- `git diff --check`: passed.
-- Browser on the local application: HTML 401 displays Korean login guidance and a sign-in link,
-  preserves the submitted prompt and shows no raw JSON parser error.
-- Browser: HTML 502 displays a Korean response error; valid mocked JSON renders one event
-  and enables registration. Malformed JSON produces a localized response error.
-- Shared response helper covers both AI parse and plan calls and status/identity fetches.
-- `gh secret list --repo baekjungi/MapDule --json name`: existing app-specific deployment
-  token name confirmed; no secret values were read.
-- `gh api repos/baekjungi/MapDule/actions/permissions`: Actions enabled.
-- `az staticwebapp show`: existing Free app in East Asia and expected production hostname confirmed.
-- `az staticwebapp environment list`: existing default production environment is Ready.
-- Static permission review: parse and plan routes require the authenticated role.
-  The existing deployment workflow is unchanged. No infrastructure templates, managed identities
-  or Azure RBAC assignments are created or changed by this code-only update.
-- Production pre-fix reproduction: unauthenticated POST `/api/ai/parse` returns HTTP 401
-  with `text/html`; this is the response the previous UI incorrectly tried to parse as JSON.
-- Real authenticated OpenAI inference is not claimed by mocked browser tests.
+- `npm run check`: passed, including the new route-estimation module.
+- `npm test`: all 91 tests passed, zero failures.
+- `npm run build`: passed; output contains only the six public browser assets.
+- `git diff --check`: passed; editor diagnostics report no errors in the changed application modules.
+- Existing GitHub Actions workflow and app-specific deployment Secret are present.
+- Last production pipeline for main commit `0b20ccb` succeeded before this update.
+- No Azure provisioning, SKU, subscription, region, RBAC or secret-value changes are requested.
+- CI will repeat syntax, tests and build against the exact pushed commit before deployment.

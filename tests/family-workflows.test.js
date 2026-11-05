@@ -2,6 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createFamilyService } = require('../api/src/family-service');
 const { createMemoryStore, createTableStore } = require('../api/src/family-store');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
 async function setup() {
   let clock = Date.parse('2026-10-25T16:00:00+09:00');
@@ -34,6 +37,8 @@ test('room API preserves old family messages and rejects nonparticipants and for
   const event = await save();
   await start(child, event);
   await assert.rejects(call(sibling, 'GET', 'chat', { room: `event:${event.id}` }), (error) => error.statusCode === 403);
+  await assert.rejects(start(sibling, event), (error) => error.statusCode === 403);
+  await assert.rejects(start(sibling, { id: 'missing-event' }), (error) => error.statusCode === 404);
   const sent = await call(child, 'POST', 'chat-send', { room: `event:${event.id}`, text: '버스 탔어요', system: true, senderId: parent.memberId });
   assert.equal(sent.message.system, false);
   assert.equal(sent.message.senderId, child.memberId);
@@ -208,4 +213,78 @@ test('Table conditional updates retry an ETag conflict and retain the other writ
   const result = await store.update('family:one', 'event_one', (current) => ({ arrivals: { ...current.arrivals, child: 'now' } }));
   assert.deepEqual(result.arrivals, { sibling: 'earlier', child: 'now' });
   assert.deepEqual(requests.filter((request) => request.method === 'PUT').map((request) => request.headers['If-Match']), ['version1', 'version2']);
+});
+
+const browserSource = fs.readFileSync(path.join(__dirname, '..', 'family.js'), 'utf8');
+function browserFunction(name) {
+  const found = browserSource.match(new RegExp(`  function ${name}\\([^]*?\\n  \\}`));
+  assert.ok(found, `browser function ${name} exists`);
+  return found[0];
+}
+
+test('GPS fallback uses the last real fix, not a recent heartbeat, and rejects implausible jumps', () => {
+  const start = Date.parse('2026-10-25T07:00:00Z');
+  let clock = start;
+  let onPosition;
+  let heartbeat;
+  class Clock extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock])); }
+    static now() { return clock; }
+  }
+  const context = vm.createContext({ Date: Clock, tracking: null,
+    MAX_TRACKING_ACCURACY_METERS: 100, FALLBACK_ACCURACY_METERS: 500, FALLBACK_AFTER_MS: 60000,
+    MAX_LOCATION_SPEED_METERS_PER_SECOND: 60, MIN_MOVE_METERS: 25, HEARTBEAT_MS: 60000, SEND_INTERVAL_MS: 20000,
+    myTrip: () => ({ points: [{ lat: 37.5, lng: 127, accuracy: 20, at: new Date(start).toISOString() }] }),
+    stopWatching() {}, setInterval(callback) { heartbeat = callback; return 1; },
+    navigator: { geolocation: { watchPosition(callback) { onPosition = callback; return 1; } } },
+    toPoint: (position) => position, distanceMeters: (first, second) => second.moved || 0,
+    flushPoints() {}, requestWakeLock() {}, updateStatusPill() {}
+  });
+  vm.runInContext(`${browserFunction('startWatching')}; startWatching('test-trip')`, context);
+  const fix = (seconds, accuracy, moved) => {
+    clock = start + seconds * 1000;
+    onPosition({ lat: 37.51, lng: 127, accuracy, moved, at: new Date(clock).toISOString() });
+  };
+  fix(30, 250, 100);
+  assert.equal(context.tracking.pending.length, 0);
+  clock = start + 60000;
+  heartbeat();
+  assert.equal(context.tracking.lastRealAt, start);
+  fix(72, 250, 100);
+  assert.equal(context.tracking.lastRealAt, start + 72000);
+  assert.equal(context.tracking.pending.length, 2);
+  fix(80, 20, 100000);
+  assert.equal(context.tracking.pending.length, 2);
+  fix(90, 2001, 100);
+  assert.equal(context.tracking.pending.length, 2);
+});
+
+test('departure alarms skip late creation, snoozed reminders and already departed participants', () => {
+  const clock = Date.parse('2026-10-25T07:35:00Z');
+  const event = { id: 'alarmtest', title: '학원', date: '2026-10-25', startTime: '17:00', endTime: '18:30', departNotice: 30,
+    participants: ['child'], createdAt: '2026-10-24T00:00:00Z', arrivals: {}, departures: {}, noShow: {} };
+  const alarms = [];
+  let saved = {};
+  class Clock extends Date { static now() { return clock; } }
+  const context = vm.createContext({ Date: Clock, alarmOpen: false, DEPART_ALARM_KEY: 'alarms',
+    state: { family: { id: 'family' } }, isJoined: () => true, me: () => 'child',
+    readJson: () => saved, familyEvents: () => [event], hasLeftFor: (item, id) => Boolean(item.departures[id]),
+    canReturnFor: () => false, memberById: () => ({ name: '아이' }), showAlarm: (alarm) => alarms.push(alarm)
+  });
+  vm.runInContext(`${browserFunction('eventStart')}; ${browserFunction('checkDepartureAlarms')}`, context);
+  vm.runInContext('checkDepartureAlarms()', context);
+  assert.equal(alarms.length, 1);
+  assert.match(alarms[0].title, /갈 시간/);
+  saved = { [alarms[0].key]: { snoozeUntil: clock + 60000 } };
+  alarms.length = 0;
+  vm.runInContext('checkDepartureAlarms()', context);
+  assert.equal(alarms.length, 0);
+  saved = {};
+  event.createdAt = '2026-10-25T07:31:00Z';
+  vm.runInContext('checkDepartureAlarms()', context);
+  assert.equal(alarms.length, 0);
+  event.createdAt = '2026-10-24T00:00:00Z';
+  event.departures.child = '2026-10-25T07:32:00Z';
+  vm.runInContext('checkDepartureAlarms()', context);
+  assert.equal(alarms.length, 0);
 });

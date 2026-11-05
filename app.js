@@ -11,6 +11,7 @@ let currentLocationMarker = null;
 let displayedMonth = new Date();
 let calendarViewMode = 'month';
 let analyzedScheduleEvents = [];
+let aiPromptRevision = 0;
 const visibleCalendars = new Set(['family', 'personal', 'work', 'health', 'other']);
 const calendarGroups = [
   { id: 'family', name: '우리 가족', color: '#ef7d57', categories: ['가족'] },
@@ -61,6 +62,43 @@ function readStoredValue(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function parseCalendarBackup(text) {
+  let backup;
+  try {
+    backup = JSON.parse(text);
+  } catch {
+    throw new Error('올바른 MapDule 백업 JSON 파일이 아닙니다.');
+  }
+  if (!backup || backup.format !== 'mapdule-backup' || (backup.version !== undefined && backup.version !== 1)
+    || !Array.isArray(backup.events)
+    || (backup.profile !== undefined && (!backup.profile || typeof backup.profile !== 'object' || Array.isArray(backup.profile)))) {
+    throw new Error('지원하는 MapDule 백업 파일이 아닙니다.');
+  }
+  const ids = new Set();
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+  backup.events.forEach((item, index) => {
+    const date = typeof item?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
+      ? new Date(`${item.date}T12:00:00`) : null;
+    const validDate = date && date.getFullYear() === Number(item.date.slice(0, 4))
+      && date.getMonth() + 1 === Number(item.date.slice(5, 7)) && date.getDate() === Number(item.date.slice(8, 10));
+    const validPlace = item?.place == null || (typeof item.place === 'object'
+      && Number.isFinite(item.place.lat) && Math.abs(item.place.lat) <= 90
+      && Number.isFinite(item.place.lng) && Math.abs(item.place.lng) <= 180
+      && ['name', 'address'].every((key) => item.place[key] === undefined || typeof item.place[key] === 'string'));
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+      || typeof item.id !== 'string' || !item.id.trim() || ids.has(item.id)
+      || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 80
+      || !validDate || !timePattern.test(item.startTime) || !timePattern.test(item.endTime)
+      || (item.allDay !== undefined && typeof item.allDay !== 'boolean')
+      || (!item.allDay && item.endTime <= item.startTime) || !validPlace
+      || !['calendarId', 'category', 'location', 'notes'].every((key) => item[key] === undefined || typeof item[key] === 'string')) {
+      throw new Error(`백업의 ${index + 1}번째 일정이 올바르지 않습니다. 날짜·시간·제목과 중복 ID를 확인해 주세요. 기존 데이터는 변경하지 않았습니다.`);
+    }
+    ids.add(item.id);
+  });
+  return backup;
 }
 
 function escapeHtml(value) {
@@ -929,6 +967,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
     if (event.key === 'Escape') close();
   };
   const updateAllDayFields = () => {
+    form.elements.endTime.setCustomValidity('');
     timeFields.forEach((input) => {
       input.disabled = form.elements.allDay.checked;
       input.required = !form.elements.allDay.checked;
@@ -947,14 +986,17 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
     form.querySelectorAll('[data-event-duration]').forEach((button) => {
       const minutesToAdd = Number(button.dataset.eventDuration);
       const active = currentDuration === minutesToAdd;
-      button.disabled = form.elements.allDay.checked || startMinutes + minutesToAdd > 23 * 60 + 59;
+      button.disabled = form.elements.allDay.checked || !Number.isFinite(startMinutes) || startMinutes + minutesToAdd > 23 * 60 + 59;
       button.setAttribute('aria-pressed', String(active));
     });
   };
   updateAllDayFields();
   form.elements.allDay.addEventListener('change', updateAllDayFields);
-  form.elements.startTime.addEventListener('input', updateDurationControls);
-  form.elements.endTime.addEventListener('input', updateDurationControls);
+  timeFields.forEach((input) => input.addEventListener('input', () => {
+    form.elements.endTime.setCustomValidity('');
+    updateDurationControls();
+  }));
+  titleInput.addEventListener('input', () => titleInput.setCustomValidity(''));
   form.querySelectorAll('[data-event-duration]').forEach((button) => {
     button.addEventListener('click', () => {
       const [hours, minutes] = form.elements.startTime.value.split(':').map(Number);
@@ -993,7 +1035,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
       placeResults.hidden = false;
       locationStatus.textContent = '목록에서 지도 위치가 맞는 장소를 선택하세요.';
     } catch {
-      locationStatus.textContent = '장소를 검색하지 못했어요. 인터넷 연결을 확인해 주세요.';
+      if (requestId === placeSearchId) locationStatus.textContent = '장소를 검색하지 못했어요. 인터넷 연결을 확인해 주세요.';
     } finally {
       if (requestId === placeSearchId) placeSearchButton.disabled = false;
     }
@@ -1008,6 +1050,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   });
   locationInput.addEventListener('input', () => {
     placeSearchId += 1;
+    placeSearchButton.disabled = false;
     placeCandidates = [];
     placeResults.hidden = true;
     if (selectedPlace && locationInput.value.trim() !== selectedPlace.name) selectedPlace = null;
@@ -1029,6 +1072,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    titleInput.setCustomValidity(titleInput.value.trim() ? '' : '일정 제목을 입력해 주세요.');
     if (!form.reportValidity()) return;
     const data = new FormData(form);
     const allDay = form.elements.allDay.checked;
@@ -1473,7 +1517,7 @@ document.querySelector('.mobile-selected-day')?.addEventListener('click', (event
 });
 document.querySelector('.calendar-view-content')?.addEventListener('keydown', (event) => {
   const dayCell = event.target.closest('.calendar-day-cell');
-  if (dayCell && (event.key === 'Enter' || event.key === ' ')) {
+  if (dayCell && event.target === dayCell && (event.key === 'Enter' || event.key === ' ')) {
     event.preventDefault();
     openCalendarDate(dayCell.dataset.calendarDate);
   }
@@ -1569,6 +1613,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
           <button class="primary-cta add-event-button" type="button"><span class="material-symbols-rounded">add</span>일정 등록</button>
         </div>
       `;
+      window.MapDuleFamily?.updateDayMap();
       return;
     }
 
@@ -1674,7 +1719,10 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
   const manualEventForm = document.querySelector('#manual-event-form');
   const endTimeInput = manualEventForm.elements.endTime;
-  endTimeInput.addEventListener('input', () => endTimeInput.setCustomValidity(''));
+  [manualEventForm.elements.startTime, endTimeInput].forEach((input) => {
+    input.addEventListener('input', () => endTimeInput.setCustomValidity(''));
+  });
+  manualEventForm.elements.title.addEventListener('input', () => manualEventForm.elements.title.setCustomValidity(''));
   manualEventForm.elements.date.value = localDateString(selectedDate);
   document.querySelector('.detail-add-event-button')?.addEventListener('click', () => openEventFormModal('create'));
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
@@ -1690,6 +1738,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
   manualEventForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    manualEventForm.elements.title.setCustomValidity(manualEventForm.elements.title.value.trim() ? '' : '일정 제목을 입력해 주세요.');
     if (!manualEventForm.reportValidity()) return;
 
     const formData = new FormData(manualEventForm);
@@ -1784,32 +1833,27 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     const file = fileInput.files?.[0];
     if (!file) return;
     try {
-      const backup = JSON.parse(await file.text());
-      if (backup.format !== 'mapdule-backup' || !Array.isArray(backup.events)) throw new Error('invalid backup');
-      const imported = backup.events.filter((item) => item
-        && typeof item.id === 'string'
-        && typeof item.title === 'string'
-        && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
-        && /^\d{2}:\d{2}$/.test(item.startTime)
-        && /^\d{2}:\d{2}$/.test(item.endTime));
+      const backup = parseCalendarBackup(await file.text());
+      const imported = backup.events;
       showModal('백업 복원', `<p>${imported.length}개 일정을 현재 일정에 합칩니다.</p><p class="modal-note">같은 일정 ID는 백업 데이터로 갱신됩니다.</p>`, '복원', () => {
         const merged = new Map(loadSavedEvents().map((item) => [item.id, item]));
         imported.forEach((item) => merged.set(item.id, item));
         if (!saveEvents([...merged.values()])) return false;
+        let profileRestored = true;
         if (backup.profile && typeof backup.profile === 'object' && !Array.isArray(backup.profile)) {
           try {
             localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(backup.profile));
             renderProfileAvatar(backup.profile);
           } catch {
-            showToast('일정은 복원했지만 프로필 저장에는 실패했습니다.', 'info');
+            profileRestored = false;
           }
         }
         setSelectedDate(selectedDate);
-        showToast('백업을 복원했습니다.', 'success');
+        showToast(profileRestored ? '백업을 복원했습니다.' : '일정은 복원했지만 프로필 저장에는 실패했습니다.', profileRestored ? 'success' : 'info');
         return true;
       });
-    } catch {
-      showToast('올바른 MapDule 백업 파일이 아닙니다.', 'info');
+    } catch (error) {
+      showToast(error.message || '백업 파일을 읽지 못했습니다.', 'info');
     } finally {
       fileInput.value = '';
     }
@@ -1908,6 +1952,17 @@ async function refreshAzureOpenAiStatus() {
 
 refreshAzureOpenAiStatus();
 
+document.querySelector('#schedule-prompt')?.addEventListener('input', () => {
+  aiPromptRevision += 1;
+  analyzedScheduleEvents = [];
+  const registerButton = document.querySelector('#ai .primary-cta');
+  registerButton.disabled = true;
+  registerButton.textContent = '다시 분석한 뒤 등록해 주세요';
+  document.querySelector('.section-title small').textContent = '일정 분석 후 표시됩니다';
+  document.querySelector('.ai-stack').innerHTML = '<div class="empty-state panel"><span class="material-symbols-rounded">event_note</span><h2>일정을 다시 분석해 주세요</h2><p>수정한 문장으로 분석하면 새 미리보기가 표시됩니다.</p></div>';
+  setAiAnalysisMessage('문장을 수정했어요. 다시 분석한 뒤 등록해 주세요.');
+});
+
 document.querySelector('#analyze-prompt')?.addEventListener('click', async (event) => {
   const promptInput = document.querySelector('#schedule-prompt');
   const prompt = promptInput.value.trim();
@@ -1918,6 +1973,7 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
   }
 
   const button = event.currentTarget;
+  const promptRevision = aiPromptRevision;
   const originalLabel = button.innerHTML;
   button.disabled = true;
   button.innerHTML = '<span class="material-symbols-rounded">progress_activity</span>일정 분석 중';
@@ -1935,6 +1991,7 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
       body: JSON.stringify({ prompt })
     });
     const result = await readAiResponse(response);
+    if (promptRevision !== aiPromptRevision) return;
     if (!Array.isArray(result.events) || result.events.length === 0) {
       throw new Error('문장에서 등록할 일정을 찾지 못했습니다. 날짜와 할 일을 포함해 다시 입력해 주세요.');
     }
@@ -1957,6 +2014,7 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
     registerButton.innerHTML = `<span class="material-symbols-rounded">calendar_add_on</span>분석된 일정 ${result.events.length}개 등록`;
     setAiAnalysisMessage('분석한 일정을 확인한 뒤 캘린더에 등록해 주세요.', 'success');
   } catch (error) {
+    if (promptRevision !== aiPromptRevision) return;
     document.querySelector('.ai-stack').innerHTML = `
       <div class="empty-state panel"><span class="material-symbols-rounded">error_outline</span><h2>일정을 분석하지 못했어요</h2><p>${escapeHtml(error.message || 'Azure OpenAI 연결 상태를 확인해 주세요.')}</p></div>
     `;

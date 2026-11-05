@@ -14,6 +14,7 @@
 @media(max-width:680px){body.calendar-visible{overflow-x:clip}}
 
 /* 하단 메뉴 4칸 */
+@media(max-width:360px){.date-heading .sync-button{display:grid;place-items:center;flex:0 0 44px;width:44px;min-width:44px;height:44px;padding:0;overflow:hidden;font-size:0}.date-heading .sync-button .material-symbols-rounded{font-size:18px}}
 .bottom-nav .nav-item{width:auto;min-width:44px;flex:0 1 72px}
 .bottom-nav{gap:clamp(2px,2vw,16px);padding-inline:8px}
 @media(max-width:360px){.bottom-nav .nav-item{min-width:42px}.bottom-nav .nav-item small{font-size:9px}}
@@ -237,7 +238,7 @@
 .progress-chip.homing{background:#e8f0fc;color:#254d88}
 .depart-button.home{background:#386b57}
 .depart-alarm-backdrop{z-index:150}
-.depart-alarm{width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;overflow-wrap:anywhere}
+.depart-alarm{width:min(420px,100%);max-height:calc(100dvh - 48px);overflow:auto;overflow-wrap:anywhere}
 .depart-alarm>.material-symbols-rounded{font-size:36px;color:#a52538}
 .depart-alarm h2{font-size:20px;line-height:1.4}
 .depart-alarm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}

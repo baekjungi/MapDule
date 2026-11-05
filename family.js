@@ -8,16 +8,16 @@
   ];
   let current = null;
 
-  function seenKey(familyId) {
-    return `mapdule-chat-seen:${familyId}`;
+  function seenKey(familyId, me) {
+    return `mapdule-chat-seen:${familyId}:${me}`;
   }
 
-  function seenFor(familyId) {
-    try { return JSON.parse(localStorage.getItem(seenKey(familyId)) || '{}') || {}; } catch { return {}; }
+  function seenFor(familyId, me) {
+    try { return JSON.parse(localStorage.getItem(seenKey(familyId, me)) || '{}') || {}; } catch { return {}; }
   }
 
   function unread(session, room) {
-    return Boolean(room.lastId && room.lastMemberId !== session.me && seenFor(session.familyId)[room.key] !== room.lastId);
+    return Boolean(room.lastId && room.lastMemberId !== session.me && seenFor(session.familyId, session.me)[room.key] !== room.lastId);
   }
 
   function updateBadges(rooms, me, familyId) {
@@ -38,9 +38,9 @@
     if (document.visibilityState !== 'visible' || !session.node.closest('.view.active')) return;
     const last = session.messages.at(-1);
     if (!last) return;
-    const seen = seenFor(session.familyId);
+    const seen = seenFor(session.familyId, session.me);
     seen[session.roomKey] = last.id;
-    try { localStorage.setItem(seenKey(session.familyId), JSON.stringify(seen)); } catch {}
+    try { localStorage.setItem(seenKey(session.familyId, session.me), JSON.stringify(seen)); } catch {}
     const room = session.rooms.find((item) => item.key === session.roomKey);
     if (room) Object.assign(room, { lastId: last.id, lastMemberId: last.senderId });
     updateBadges(session.rooms, session.me, session.familyId);
@@ -256,6 +256,7 @@
       if (current === session && session.roomKey === roomKey) {
         if (error.code === 'ROOM_CLOSED' || error.code === 'NOT_IN_ROOM') {
           showToast(error.message, 'info');
+          delete session.drafts[roomKey];
           session.rooms = session.rooms.filter((room) => room.key !== roomKey);
           selectRoom(session, 'family');
           window.MapDuleFamily?.refresh();
@@ -1370,7 +1371,7 @@
       ${todayBoardHtml()}
       <section class="family-share panel ${sharing ? 'is-sharing' : ''}">
         ${sharing ? `
-          <div class="share-live"><span class="live-dot"></span><b>내 위치 공유 중</b><small>${escapeHtml(mine.title)}${mine.destination ? ` → ${escapeHtml(mine.destination.name)}` : ''}</small></div>
+          <div class="share-live"><span class="live-dot"></span><b>내 위치 공유 중</b><small>${escapeHtml(mine.title)}${mine.destination && !mine.returnFor ? ` → ${escapeHtml(mine.destination.name)}` : ''}</small></div>
           ${estimate ? `<p class="share-eta">약 <b>${estimate.minutes}분</b> 남음 · ${formatClock(estimate.arrival)} 도착 예상${estimate.meters <= 1000 ? ` · 목적지까지 약 ${formatDistance(estimate.meters)}` : ''}${estimate.lateMinutes ? ` <em>${estimate.lateMinutes}분 늦을 수 있어요</em>` : ''}</p>` : '<p class="share-eta">목적지가 없어 도착은 직접 눌러 주세요.</p>'}
           ${watchersHtml()}
           <p class="share-note">${accuracyLabel} · ${tracking ? '화면을 켜 두면 위치가 더 정확하게 전달돼요.' : '이 기기에서 위치를 보내고 있지 않아요. 아래 버튼으로 다시 시작하세요.'}</p>
