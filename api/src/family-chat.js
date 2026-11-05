@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-const MAX_MESSAGES = 200;
+const MAX_MESSAGES = 1000;
 const MAX_MESSAGE_LENGTH = 1000;
 const ROOM_GRACE_MS = 30 * 60 * 1000;
 
@@ -114,17 +114,20 @@ function createFamilyChat({ store, now, FamilyError }) {
     await append(context, room.key, `${context.member.name}님이 ${trip.returnFor ? '집에 ' : ''}도착했어요`,
       { system: true, token: `arrive-${trip.id}`, at: Date.parse(trip.endedAt) });
     const members = new Set((await store.list(partition, 'member_')).map(({ value }) => value.id));
-    const travelers = meta.travelers.filter((id) => members.has(id));
     const trips = (await store.list(partition, 'trip_')).map(({ value }) => value);
     if (trips.some((item) => linked(item, event.id) && item.status === 'moving')) return;
-    const complete = travelers.length && travelers.every((id) =>
-      event.returnHome ? event.homeArrivals?.[id] : event.arrivals?.[id]);
-    if (complete) {
-      meta.allArrivedAt = new Date(now()).toISOString();
-      meta.closesAt = new Date(now() + ROOM_GRACE_MS).toISOString();
-      await store.put(partition, room.row, meta);
-      await append(context, room.key, `모두 ${event.returnHome ? '집에 ' : ''}도착했어요. 이 대화방은 30분 뒤 사라져요.`, { system: true, token: `complete-${trip.id}` });
-    }
+    const latest = await store.get(partition, `event_${event.id}`);
+    if (!latest) return;
+    const completed = await store.update(partition, room.row, (current) => {
+      if (!current || current.allArrivedAt) return current;
+      const travelers = current.travelers.filter((id) => members.has(id));
+      const complete = travelers.length && travelers.every((id) =>
+        latest.returnHome ? latest.homeArrivals?.[id] : latest.arrivals?.[id]);
+      return complete ? { ...current, allArrivedAt: new Date(now()).toISOString(), closesAt: new Date(now() + ROOM_GRACE_MS).toISOString() } : current;
+    });
+    if (completed?.allArrivedAt) await append(context, room.key,
+      `모두 ${latest.returnHome ? '집에 ' : ''}도착했어요. 이 대화방은 30분 뒤 사라져요.`,
+      { system: true, token: `complete-${event.id}`, at: Date.parse(completed.allArrivedAt) });
   }
 
   async function readRoom(context, query) {

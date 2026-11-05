@@ -17,6 +17,9 @@ const ENDED_TRIP_VISIBLE_MS = 12 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 2 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMITS = { create: 3, join: 8, member: 240, message: 20 };
+const JOIN_FAILURE_WINDOW_MS = 10 * 60 * 1000;
+const JOIN_FAILURE_LIMIT_PER_CLIENT = 10;
+const JOIN_FAILURE_LIMIT_GLOBAL = 100;
 const TRAVEL_MODES = new Set(['transit', 'walk', 'car']);
 const DEPART_NOTICE_OPTIONS = new Set([0, 10, 20, 30, 45, 60, 90]);
 
@@ -221,11 +224,50 @@ function createFamilyService({ store, now = () => Date.now() }) {
     return { credential, memberId: member.id };
   }
 
-  async function joinFamily(body) {
+  const joinFailures = new Map();
+
+  function joinLockedError() {
+    return new FamilyError(429, '초대 코드 입력 실패가 너무 많습니다. 잠시 후 다시 시도해 주세요.', 'RATE_LIMITED');
+  }
+
+  async function readGlobalJoinFailures() {
+    const currentTime = now();
+    const record = await store.get('joinguard', 'global');
+    if (!record || currentTime - record.startedAt >= JOIN_FAILURE_WINDOW_MS) return { startedAt: currentTime, count: 0 };
+    return record;
+  }
+
+  // 6자리 초대 코드 무차별 대입을 막기 위해 실패 횟수를 클라이언트별·전체로 제한한다.
+  async function assertJoinAllowed(identity) {
+    const entry = joinFailures.get(identity);
+    if (entry && now() - entry.startedAt < JOIN_FAILURE_WINDOW_MS && entry.count >= JOIN_FAILURE_LIMIT_PER_CLIENT) throw joinLockedError();
+    if ((await readGlobalJoinFailures()).count >= JOIN_FAILURE_LIMIT_GLOBAL) throw joinLockedError();
+  }
+
+  async function recordJoinFailure(identity) {
+    const currentTime = now();
+    let entry = joinFailures.get(identity);
+    if (!entry || currentTime - entry.startedAt >= JOIN_FAILURE_WINDOW_MS) {
+      entry = { startedAt: currentTime, count: 0 };
+      joinFailures.set(identity, entry);
+    }
+    entry.count += 1;
+    while (joinFailures.size > 5000) joinFailures.delete(joinFailures.keys().next().value);
+    const global = await readGlobalJoinFailures();
+    global.count += 1;
+    await store.put('joinguard', 'global', global);
+  }
+
+  async function joinFamily(body, clientKey) {
+    const identity = typeof clientKey === 'string' && clientKey ? clientKey.slice(0, 128) : 'unknown';
     const inviteCode = cleanText(body.inviteCode, 12, '초대 코드', { required: true }).toUpperCase().replace(/[^A-Z0-9]/g, '');
     const memberName = cleanText(body.memberName, 20, '내 이름', { required: true });
+    await assertJoinAllowed(identity);
     const invite = inviteCode ? await store.get('invite', inviteCode) : null;
-    if (!invite) throw new FamilyError(404, '초대 코드를 찾을 수 없습니다. 코드를 다시 확인해 주세요.', 'INVITE_NOT_FOUND');
+    if (!invite) {
+      await recordJoinFailure(identity);
+      throw new FamilyError(404, '초대 코드를 찾을 수 없습니다. 코드를 다시 확인해 주세요.', 'INVITE_NOT_FOUND');
+    }
     const family = await loadFamily(invite.familyId);
     const { member, credential } = await addMember(family, memberName);
     return { credential, memberId: member.id };
@@ -411,9 +453,10 @@ function createFamilyService({ store, now = () => Date.now() }) {
       || (replace && value.seriesId === series.id && value.date >= from && !value.detached && !plannedIds.has(value.id)));
     const count = allRows.length - removed.length + planned.filter((event) => !existing.has(event.id)).length;
     if (count > MAX_EVENTS) throw new FamilyError(409, '가족 일정이 너무 많습니다. 지난 일정을 정리해 주세요.', 'TOO_MANY_EVENTS');
-    await store.put(partition, `series_${series.id}`, { ...series, generatedUntil: last > (series.generatedUntil || '') ? last : series.generatedUntil });
+    await store.put(partition, `series_${series.id}`, series);
     for (const { value } of removed) await removeEventRecord(context, value.id);
     for (const event of planned) await store.put(partition, `event_${event.id}`, event);
+    await store.put(partition, `series_${series.id}`, { ...series, generatedUntil: last > (series.generatedUntil || '') ? last : series.generatedUntil });
     return planned;
   }
 
@@ -658,7 +701,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     const key = `${String(method).toUpperCase()} ${action}`;
     if (publicActions[key]) {
       enforceRateLimit(clientKey, action);
-      return publicActions[key](body || {});
+      return publicActions[key](body || {}, clientKey);
     }
     if (memberActions[key]) {
       enforceRateLimit(clientKey, 'member');

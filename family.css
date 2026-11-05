@@ -196,6 +196,54 @@
 .family-chat-picker button{width:44px;height:44px;border-radius:10px;background:#f6f7fb;font-size:24px}
 .family-chat button:focus-visible{outline:2px solid var(--family,#ef7d57);outline-offset:2px}
 @media(max-width:480px){.family-chat{padding:14px}.family-chat-toolbar>small{flex-basis:100%;order:1}.family-chat-message{max-width:90%}}
+
+.family-chat-rooms{display:flex;gap:6px;overflow-x:auto;padding:10px 0;scrollbar-width:thin}
+.family-chat-rooms button{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:44px;max-width:220px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font:inherit;font-size:13px;overflow-wrap:anywhere;white-space:normal;text-align:left}
+.family-chat-rooms button[aria-selected="true"]{border-color:var(--family-dark);background:var(--family-soft)}
+.family-chat-rooms button>span,.chat-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:50%;background:#c53043;color:#fff;font-size:10px;line-height:1}
+.family-chat-heading h2{min-width:0;overflow-wrap:anywhere}
+.family-chat-room-info{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.family-chat-live .trip-status{font-size:12px;padding:6px 0;overflow-wrap:anywhere}
+.family-chat-message.is-system{align-self:center;max-width:95%;background:#edf5f2;border-radius:8px}
+.family-chat-message.is-system>b{color:#386b57}
+.family-header-button,.nav-item{position:relative}
+.chat-badge{position:absolute;top:0;right:4px;pointer-events:none}
+.family-header-button .chat-badge{top:-5px;right:-5px;display:grid!important}
+.room-open-button{display:inline-flex;align-items:center;gap:5px;margin:10px 0 0 6px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font:inherit;font-size:13px;min-height:44px}
+.room-open-button .material-symbols-rounded{font-size:18px}
+.watchers-note{display:flex;align-items:flex-start;gap:6px;margin-top:8px!important;color:#386b57!important;font-size:12px!important;overflow-wrap:anywhere}
+.watchers-note .material-symbols-rounded{flex:none;font-size:17px}
+.repeat-note{display:flex;gap:5px;align-items:center;font-size:12px;color:#386b57}
+.repeat-note .material-symbols-rounded{font-size:17px}
+.event-repeat-field,.event-scope-field{grid-column:1/-1;border:0;padding:0;margin:0;min-width:0}
+.event-repeat-field legend,.event-scope-field legend{margin-bottom:8px;color:#64687a;font-size:12px;font-weight:700}
+.repeat-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.repeat-days label{position:relative;cursor:pointer}
+.repeat-days input{position:absolute;opacity:0}
+.repeat-days span{display:grid;place-items:center;height:40px;border:1px solid var(--line);border-radius:8px;font-size:13px}
+.repeat-days input:checked+span{background:#386b57;border-color:#386b57;color:#fff}
+.repeat-days input:focus-visible+span{outline:2px solid #386b57;outline-offset:2px}
+.repeat-days input:disabled+span{opacity:.5}
+.repeat-until{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px}
+.repeat-until input{min-width:0;flex:1;padding:8px;border:1px solid var(--line);border-radius:8px;font:inherit}
+.event-return-field{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:13px}
+.event-return-field input,.event-scope-field input{accent-color:#386b57}
+.event-scope-field{display:flex;flex-wrap:wrap;gap:10px 16px}
+.event-scope-field label{display:flex;gap:6px;align-items:center;font-size:13px}
+.event-modal-backdrop~.modal-backdrop{z-index:110}
+.event-family-option[hidden]{display:none!important}
+.progress-chip.noshow{background:#fff0f0;color:#a52538}
+.progress-chip.home{background:#e3f6ec;color:#28654c}
+.progress-chip.homing{background:#e8f0fc;color:#254d88}
+.depart-button.home{background:#386b57}
+.depart-alarm-backdrop{z-index:150}
+.depart-alarm{width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;overflow-wrap:anywhere}
+.depart-alarm>.material-symbols-rounded{font-size:36px;color:#a52538}
+.depart-alarm h2{font-size:20px;line-height:1.4}
+.depart-alarm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.depart-alarm-actions button{flex:1;min-width:120px;min-height:44px;padding:10px;border-radius:8px;background:#edf0f5;font:inherit;font-size:13px;font-weight:700}
+.depart-alarm-actions [data-alarm-primary]{background:#386b57;color:#fff}
+@media(prefers-reduced-motion:reduce){.depart-alarm-backdrop *{animation:none!important}}
 @media(max-width:680px){
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),textarea,select:not(.calendar-view-select){font-size:16px}
 body.calendar-visible .calendar-controls .text-icon{min-width:36px;min-height:36px}

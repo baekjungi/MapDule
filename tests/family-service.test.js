@@ -283,6 +283,36 @@ test('limits repeated family creation and invite-code guesses per client', async
   );
 });
 
+test('locks invite-code guessing after repeated failures even across rate-limit windows', async () => {
+  const { service, advance } = setup();
+  const join = (clientKey) => service.handle({ method: 'POST', action: 'join', clientKey, body: { inviteCode: 'ZZZZZZ', memberName: '사람' } });
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await assert.rejects(join('guesser'), (error) => error.statusCode === 404);
+    if (attempt % 5 === 4) advance(61 * 1000);
+  }
+  await assert.rejects(join('guesser'), (error) => error.statusCode === 429 && error.code === 'RATE_LIMITED');
+  advance(10 * 60 * 1000);
+  await assert.rejects(join('guesser'), (error) => error.statusCode === 404);
+});
+
+test('locks all joins after too many failed invite codes across clients', async () => {
+  const { service, advance } = setup();
+  const { inviteCode } = await createFamilyWithTwoMembers(service);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await assert.rejects(
+      service.handle({ method: 'POST', action: 'join', clientKey: `client-${attempt}`, body: { inviteCode: 'ZZZZZZ', memberName: '사람' } }),
+      (error) => error.statusCode === 404
+    );
+  }
+  await assert.rejects(
+    service.handle({ method: 'POST', action: 'join', clientKey: 'honest', body: { inviteCode, memberName: '친구' } }),
+    (error) => error.statusCode === 429 && error.code === 'RATE_LIMITED'
+  );
+  advance(10 * 60 * 1000);
+  const joined = await service.handle({ method: 'POST', action: 'join', clientKey: 'honest', body: { inviteCode, memberName: '친구' } });
+  assert.ok(joined.credential);
+});
+
 test('removes expired trip records from storage on the next state request', async () => {
   const { service, store, advance, time } = setup();
   const { parent, child } = await createFamilyWithTwoMembers(service);

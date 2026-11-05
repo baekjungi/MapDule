@@ -159,6 +159,40 @@ test('repeat generation enforces capacity before removing or overwriting existin
   assert.equal(state.events.length, 1499);
 });
 
+test('a failed repeat write does not advance the generation cursor and the next state request repairs it', async () => {
+  const { store, partition, call, parent, save } = await setup();
+  const originalPut = store.put;
+  let eventWrites = 0;
+  store.put = async (target, row, value) => {
+    if (row.startsWith('event_') && ++eventWrites === 2) throw new Error('temporary write failure');
+    return originalPut.call(store, target, row, value);
+  };
+  await assert.rejects(save({ date: '2026-10-26', repeat: { days: [1, 3, 5] } }), /temporary write failure/);
+  const rule = (await store.list(partition, 'series_'))[0].value;
+  assert.equal(rule.generatedUntil, '2026-10-25');
+  store.put = originalPut;
+  const state = await call(parent, 'GET', 'state');
+  assert.equal(state.events.length, 24);
+  assert.equal((await store.list(partition, 'series_'))[0].value.generatedUntil, '2026-12-20');
+});
+
+test('simultaneous home arrivals keep both records and announce completion once', async () => {
+  const { call, parent, child, sibling, save, at, start, arrive } = await setup();
+  const event = await save({ participants: [child.memberId, sibling.memberId], returnHome: true });
+  const outgoing = await Promise.all([start(child, event), start(sibling, event)]);
+  at('16:50');
+  await Promise.all([arrive(child, outgoing[0].trip), arrive(sibling, outgoing[1].trip)]);
+  at('18:31');
+  const home = await Promise.all([start(child, event, true), start(sibling, event, true)]);
+  at('18:50');
+  await Promise.all([arrive(child, home[0].trip), arrive(sibling, home[1].trip)]);
+  const state = await call(parent, 'GET', 'state');
+  assert.equal(Object.keys(state.events[0].homeArrivals).length, 2);
+  assert.ok(state.rooms.find((room) => room.eventId === event.id).allArrivedAt);
+  const chat = await call(parent, 'GET', 'chat', { room: `event:${event.id}` });
+  assert.equal(chat.messages.filter((message) => message.text.startsWith('모두 집에')).length, 1);
+});
+
 test('Table conditional updates retry an ETag conflict and retain the other writer data', async () => {
   const requests = [];
   let reads = 0;

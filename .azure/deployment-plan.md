@@ -1,6 +1,6 @@
 # MapDule production update
 
-Status: Approved
+Status: Validated
 
 ## 1. Scope and approval
 
@@ -65,7 +65,14 @@ Guest-access validation: 2026-11-05, approximately 21:53 Asia/Seoul.
 - Existing deployment token name and live Static Web App hostname confirmed without reading secrets.
 - Static review confirms both AI routes explicitly permit the anonymous role, API keys
   remain on the server and no Azure RBAC or infrastructure changes are included.
-- Only guest-access files are staged for deployment; uncommitted family/UI work is preserved.
+- Concurrent integration commit `29cd16eb53f05e940ae591edc57f1706e10aee9c`
+  included guest access. Its existing GitHub Actions run `42030923252` succeeded.
+- Production verification: unauthenticated status returned HTTP 200 with
+  `configured: true` and `authRequired: false`.
+- Real unauthenticated parse returned HTTP 200 and the requested meeting on
+  2026-11-06, 15:00-16:00; plan returned HTTP 200 with a Korean summary.
+- Browser verification displayed the parsed meeting preview and enabled registration
+  without requiring a login.
 
 The results below are historical evidence for the preceding deployment.
 
