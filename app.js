@@ -291,8 +291,14 @@ function initializeKakaoMap() {
       showError('Kakao Maps SDK가 초기화되지 않았어요. JavaScript 키와 허용 도메인을 확인해 주세요.');
       return;
     }
-    kakaoSdkReady = true;
-    createMapWhenVisible();
+    try {
+      window.kakao.maps.load(() => {
+        kakaoSdkReady = true;
+        createMapWhenVisible();
+      });
+    } catch {
+      showError('Kakao Maps SDK가 초기화되지 않았어요. JavaScript 키와 허용 도메인을 확인해 주세요.');
+    }
   };
   script.onerror = () => {
     kakaoSdkLoading = false;
@@ -892,6 +898,10 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
         </div>
         <label class="event-form-field"><span>캘린더</span><select name="calendarId">${selectableCalendars.map((group) => `<option value="${group.id}" ${selectedCalendar === group.id ? 'selected' : ''}>${group.name}</option>`).join('')}</select></label>
         ${familyJoined ? `<fieldset class="event-participants-field" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>누가 가나요?</legend><div class="participant-options">${participantOptions}</div></fieldset>` : ''}
+        ${familyJoined ? `<label class="event-form-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><span>출발 확인</span><select name="departNotice">${[[0, '사용 안 함'], [10, '10분 전까지 출발'], [20, '20분 전까지 출발'], [30, '30분 전까지 출발'], [45, '45분 전까지 출발'], [60, '1시간 전까지 출발'], [90, '1시간 30분 전까지 출발']].map(([value, label]) => `<option value="${value}" ${Number(isEditing ? existingEvent.departNotice || 0 : 30) === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+        <fieldset class="event-repeat-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>매주 반복</legend><div class="repeat-days">${['일', '월', '화', '수', '목', '금', '토'].map((label, day) => `<label><input type="checkbox" name="repeatDays" value="${day}" ${isEditing && existingEvent.repeatDays?.includes(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><label class="repeat-until">반복 종료일<input name="repeatUntil" type="date" value="${escapeHtml(isEditing ? existingEvent.repeatUntil || '' : '')}"></label></fieldset>
+        <label class="event-return-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><input type="checkbox" name="returnHome" ${(isEditing ? existingEvent.returnHome : true) ? 'checked' : ''}><span>끝나면 집으로 귀가 알림</span></label>
+        ${isEditing && existingEvent.seriesId ? '<fieldset class="event-scope-field"><legend>수정 범위</legend><label><input type="radio" name="scope" value="one" checked>이 날만</label><label><input type="radio" name="scope" value="series">이 날부터 이후 모두</label></fieldset>' : ''}` : ''}
         <div class="event-form-field event-location-field"><label for="event-location-input"><span>장소 <small>선택</small></span></label><div class="event-location-input-row"><input id="event-location-input" name="location" type="text" maxlength="120" placeholder="장소명이나 도로명 주소" value="${escapeHtml(isEditing ? existingEvent.location || '' : '')}"><button class="event-location-search" type="button" aria-label="장소 검색" title="지도에서 장소 검색"><span class="material-symbols-rounded">search</span></button></div><p class="event-location-status" aria-live="polite">${selectedPlace ? `선택한 위치 · ${escapeHtml(selectedPlace.name)}${selectedPlace.address ? ` · ${escapeHtml(selectedPlace.address)}` : ''}` : '검색 결과를 확인해 정확한 장소를 선택하세요.'}</p><div class="event-place-results" hidden></div></div>
         <label class="event-form-field"><span>설명</span><textarea name="notes" rows="3" maxlength="300" placeholder="메모를 남겨 보세요">${escapeHtml(isEditing ? existingEvent.notes || existingEvent.description || '' : '')}</textarea></label>
         <footer class="event-modal-footer">
@@ -922,6 +932,9 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
     timeFields.forEach((input) => {
       input.disabled = form.elements.allDay.checked;
       input.required = !form.elements.allDay.checked;
+    });
+    form.querySelectorAll('.event-family-option input, .event-family-option select').forEach((input) => {
+      input.disabled = form.elements.allDay.checked;
     });
     updateDurationControls();
   };
@@ -1003,7 +1016,11 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   form.elements.calendarId.addEventListener('change', () => {
     const participantsField = form.querySelector('.event-participants-field');
     if (participantsField) participantsField.hidden = form.elements.calendarId.value !== 'family';
+    form.querySelectorAll('.event-family-option').forEach((field) => {
+      field.hidden = form.elements.calendarId.value !== 'family';
+    });
   });
+  form.elements.repeatUntil?.addEventListener('input', () => form.elements.repeatUntil.setCustomValidity(''));
   modal.addEventListener('click', (event) => {
     if (event.target === modal || event.target.closest('.event-modal-close, .event-cancel-button')) close();
   });
@@ -1039,7 +1056,20 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
     };
     if (savedEvent.location && selectedPlace) savedEvent.place = { ...selectedPlace, name: savedEvent.location };
     const toFamily = group.id === 'family';
-    if (toFamily) savedEvent.participants = data.getAll('participants').map(String);
+    const saveScope = isEditing && existingEvent.seriesId ? String(data.get('scope') || 'one') : 'series';
+    if (toFamily) {
+      savedEvent.participants = data.getAll('participants').map(String);
+      savedEvent.departNotice = allDay ? 0 : Number(data.get('departNotice') || 0);
+      savedEvent.returnHome = !allDay && form.elements.returnHome.checked;
+      const days = allDay ? [] : data.getAll('repeatDays').map(Number);
+      const until = String(data.get('repeatUntil') || '') || null;
+      if (days.length && until && until < savedEvent.date) {
+        form.elements.repeatUntil.setCustomValidity('반복 종료일은 일정 날짜보다 빠를 수 없어요.');
+        form.elements.repeatUntil.reportValidity();
+        return;
+      }
+      savedEvent.repeat = days.length && !(isEditing && existingEvent.seriesId && saveScope === 'one') ? { days, until } : null;
+    }
     if (!savedEvent.place && isEditing && existingEvent.place?.name === savedEvent.location) savedEvent.place = existingEvent.place;
     const conflict = findTimeConflict(savedEvent, isEditing ? existingEvent.id : null);
     if (conflict && !confirm(`'${conflict.title}' 일정과 시간이 겹쳐요. 그래도 저장할까요?`)) return;
@@ -1052,7 +1082,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
       if (toFamily) {
         if (isEditing && !wasFamily && !saveEvents(savedEvents.filter((item) => item.id !== existingEvent.id))) return;
         try {
-          await family.saveEvent(savedEvent);
+          await family.saveEvent(savedEvent, saveScope);
         } catch (error) {
           if (isEditing && !wasFamily) saveEvents(savedEvents);
           throw error;
@@ -1089,14 +1119,21 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
 }
 
 // 일정 삭제는 실수로 누르기 쉬워 항상 한 번 더 묻는다. 가족 일정은 모두에게서 사라진다는 점을 알린다.
-async function deleteEventWithConfirm(item, onDone) {
+async function deleteEventWithConfirm(item, onDone, scope = null) {
   const isFamily = item.source === 'family';
+  if (isFamily && item.seriesId && scope === null) {
+    showModal('반복 일정 삭제', `<p>${escapeHtml(item.title)}</p><fieldset class="event-scope-field"><legend>삭제 범위</legend><label><input type="radio" name="deleteScope" value="one" checked>이 날만</label><label><input type="radio" name="deleteScope" value="series">이 날부터 이후 모두</label></fieldset>`, '삭제', (modal) => {
+      deleteEventWithConfirm(item, onDone, modal.querySelector('[name="deleteScope"]:checked').value);
+      return true;
+    });
+    return;
+  }
   const message = isFamily
     ? `'${item.title}' 일정을 삭제할까요?\n가족 모두의 캘린더에서 사라져요.`
     : `'${item.title}' 일정을 삭제할까요?`;
-  if (!confirm(message)) return;
+  if (scope === null && !confirm(message)) return;
   try {
-    if (isFamily) await window.MapDuleFamily.deleteEvent(item.id);
+    if (isFamily) await window.MapDuleFamily.deleteEvent(item.id, scope || 'one');
     else if (!saveEvents(loadSavedEvents().filter((saved) => saved.id !== item.id))) return;
   } catch (error) {
     showToast(error.message || '일정을 삭제하지 못했습니다.', 'info');
@@ -1239,11 +1276,20 @@ function renderAgendaView() {
   }).join('')}</div>`;
 }
 
+function centerSelectedWeekDay(content) {
+  const weekView = content.querySelector('.week-view');
+  const heading = weekView?.querySelector(`.week-day-heading[data-select-date="${localDateString(selectedDate)}"]`);
+  if (!weekView || !heading) return;
+  const offset = heading.getBoundingClientRect().left - weekView.getBoundingClientRect().left + weekView.scrollLeft;
+  weekView.scrollLeft = Math.max(0, offset - (weekView.clientWidth - heading.offsetWidth) / 2);
+}
+
 function renderCalendarView() {
   const content = document.querySelector('.calendar-view-content');
   if (!content) return;
   const renderers = { month: renderMonthView, week: renderWeekView, day: renderDayView, agenda: renderAgendaView };
   content.innerHTML = renderers[calendarViewMode]();
+  if (calendarViewMode === 'week') centerSelectedWeekDay(content);
   renderMobileSelectedDay();
   const select = document.querySelector('.calendar-view-select');
   if (select) select.value = calendarViewMode;

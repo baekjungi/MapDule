@@ -147,8 +147,8 @@ body.calendar-visible .app-shell{padding-bottom:calc(92px + env(safe-area-inset-
 .month-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
 .calendar-day-cell{min-height:clamp(64px,16vw,82px);padding:3px 2px;gap:3px}
 .calendar-day-number{width:24px;height:24px;font-size:11px}
-.event-badge.compact{min-height:18px;justify-content:flex-start;padding:3px 4px;font-size:8px}
-.calendar-more{font-size:8px}
+.event-badge.compact{min-height:20px;justify-content:flex-start;padding:3px 4px;font-size:9px}
+.calendar-more{font-size:9px}
 .mobile-selected-day{display:block;margin:14px 0 18px;padding:15px 15px 12px;border:1px solid #e7e8ef;border-radius:14px;background:#fff;box-shadow:0 3px 14px #20243a08}
 .mobile-selected-day{animation:calendar-day-expand .2s ease-out}
 @keyframes calendar-day-expand{from{opacity:.65;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
@@ -232,14 +232,15 @@ body.calendar-visible .app-shell{padding-bottom:calc(92px + env(safe-area-inset-
 	.event-time-fields{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
 	.event-duration-presets{gap:5px}
 	.event-duration-presets>span{width:100%}
-	.event-modal-footer{padding-bottom:max(14px,env(safe-area-inset-bottom))}
+	.event-modal-footer{margin-right:-18px;margin-left:-18px;padding-right:18px;padding-left:18px;padding-bottom:max(14px,env(safe-area-inset-bottom))}
 }
 @media(max-width:390px){
 	.event-modal-form{padding-right:14px;padding-left:14px}
+	.event-modal-footer{margin-right:-14px;margin-left:-14px;padding-right:14px;padding-left:14px}
 	.event-time-fields{gap:7px}
 	.event-duration-presets button{min-height:36px;padding:6px 10px}
 	.event-badge-time{display:none}
-	.event-badge.compact{font-size:8px}
+	 .event-badge.compact{font-size:9px}
 }
 .event-badge.is-ended .event-badge-title,.saved-event.is-ended .event-title-ended{color:var(--muted);text-decoration:line-through;text-decoration-color:#8b8e9b;text-decoration-thickness:1.5px}
 .avatar{display:grid;place-items:center;overflow:hidden;padding:0}

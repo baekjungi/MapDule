@@ -26,15 +26,15 @@ test('family chat ships inside the original family assets with Korean UI', () =>
   assert.match(styles, /\.family-chat-send/);
 });
 
-test('Azure Static Web Apps protects AI parsing with authentication', () => {
+test('Azure Static Web Apps allows guest AI access while preserving security headers', () => {
   const projectRoot = path.resolve(__dirname, '..');
   const configPath = path.join(projectRoot, 'staticwebapp.config.json');
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   const parseRoute = config.routes.find((route) => route.route === '/api/ai/parse');
   const planRoute = config.routes.find((route) => route.route === '/api/ai/plan');
 
-  assert.deepEqual(parseRoute?.allowedRoles, ['authenticated']);
-  assert.deepEqual(planRoute?.allowedRoles, ['authenticated']);
+  assert.deepEqual(parseRoute?.allowedRoles, ['anonymous']);
+  assert.deepEqual(planRoute?.allowedRoles, ['anonymous']);
   assert.match(config.globalHeaders['Content-Security-Policy'], /upgrade-insecure-requests/);
   assert.deepEqual(
     JSON.parse(fs.readFileSync(path.join(projectRoot, 'dist', 'staticwebapp.config.json'), 'utf8')).routes,

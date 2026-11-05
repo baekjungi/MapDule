@@ -34,6 +34,8 @@
 
 AI 일정 분석은 서버에서 Azure OpenAI를 호출하며 브라우저에는 API 키를 전달하지 않습니다. 대중교통·도로 길찾기 API는 아직 연결되지 않아 도착 예상 시간은 직선거리 기반 추정입니다.
 
+AI 일정 분석과 저장된 일정 계산은 Microsoft 계정 없이 사용할 수 있습니다. 남용 방지를 위해 IP별 요청 수와 서버 동시 실행 수를 제한하며, 한도 초과 시 잠시 기다린 뒤 다시 사용할 수 있습니다.
+
 카카오 지도를 연결하려면 `index.html`의 `kakao-javascript-key` 메타 태그에 Kakao Developers의 JavaScript 키를 입력하고, Kakao Developers의 Web 플랫폼에 로컬 및 배포 도메인을 허용 목록으로 등록합니다. 키는 브라우저에 공개되므로 JavaScript 키만 사용하고 도메인 제한을 설정하세요.
 
 ## 실행

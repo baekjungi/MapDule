@@ -165,7 +165,7 @@ test('ignores inaccurate GPS fixes and waits for a reliable arrival point', asyn
     body: { title: '목적지 이동', destination, points: [{ ...destination, accuracy: 250, at: new Date(time()).toISOString() }] }
   });
   assert.equal(trip.status, 'moving');
-  assert.equal(trip.points.length, 0, 'poor initial fixes are discarded');
+  assert.equal(trip.points.length, 1, 'indoor fixes are stored without triggering arrival');
 
   advance(5000);
   const inaccurate = await service.handle({
@@ -173,7 +173,7 @@ test('ignores inaccurate GPS fixes and waits for a reliable arrival point', asyn
     body: { tripId: trip.id, points: [{ ...destination, accuracy: 101, at: new Date(time()).toISOString() }] }
   });
   assert.equal(inaccurate.trip.status, 'moving');
-  assert.equal(inaccurate.trip.points.length, 0, 'poor fixes do not trigger arrival');
+  assert.equal(inaccurate.trip.points.length, 2, 'poor fixes stay visible but do not trigger arrival');
 
   advance(5000);
   const accurate = await service.handle({

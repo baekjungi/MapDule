@@ -8,14 +8,87 @@
   ];
   let current = null;
 
+  function seenKey(familyId) {
+    return `mapdule-chat-seen:${familyId}`;
+  }
+
+  function seenFor(familyId) {
+    try { return JSON.parse(localStorage.getItem(seenKey(familyId)) || '{}') || {}; } catch { return {}; }
+  }
+
+  function unread(session, room) {
+    return Boolean(room.lastId && room.lastMemberId !== session.me && seenFor(session.familyId)[room.key] !== room.lastId);
+  }
+
+  function updateBadges(rooms, me, familyId) {
+    const session = { me, familyId };
+    const count = rooms.filter((room) => unread(session, room)).length;
+    document.querySelectorAll('[data-view="family"]').forEach((button) => {
+      button.querySelector('.chat-badge')?.remove();
+      if (!count) return;
+      const badge = document.createElement('span');
+      badge.className = 'chat-badge';
+      badge.textContent = count > 9 ? '9+' : String(count);
+      badge.setAttribute('aria-label', `읽지 않은 대화방 ${count}개`);
+      button.append(badge);
+    });
+  }
+
+  function markSeen(session) {
+    if (document.visibilityState !== 'visible' || !session.node.closest('.view.active')) return;
+    const last = session.messages.at(-1);
+    if (!last) return;
+    const seen = seenFor(session.familyId);
+    seen[session.roomKey] = last.id;
+    try { localStorage.setItem(seenKey(session.familyId), JSON.stringify(seen)); } catch {}
+    const room = session.rooms.find((item) => item.key === session.roomKey);
+    if (room) Object.assign(room, { lastId: last.id, lastMemberId: last.senderId });
+    updateBadges(session.rooms, session.me, session.familyId);
+  }
+
+  function renderRooms(session) {
+    const nav = session.node.querySelector('.family-chat-rooms');
+    const signature = JSON.stringify(session.rooms.map((room) => [room.key, room.title, unread(session, room)])) + session.roomKey;
+    if (session.roomsSignature !== signature) {
+      session.roomsSignature = signature;
+      nav.innerHTML = session.rooms.map((room) => `<button type="button" role="tab" aria-selected="${room.key === session.roomKey}" data-chat-room="${escapeHtml(room.key)}">${escapeHtml(room.title)}${room.kind === 'event' ? ' · 이동방' : ''}${unread(session, room) ? '<span aria-label="새 메시지">N</span>' : ''}</button>`).join('');
+    }
+    const room = session.rooms.find((item) => item.key === session.roomKey);
+    session.node.querySelector('.family-chat-heading h2').innerHTML = `<span class="material-symbols-rounded">forum</span>${escapeHtml(room?.title || '가족 채팅')}`;
+    const info = session.node.querySelector('.family-chat-room-info');
+    info.textContent = room?.kind === 'event'
+      ? room.closesAt ? `${Math.max(0, Math.ceil((Date.parse(room.closesAt) - Date.now()) / 60000))}분 뒤 대화방 삭제` : '이동 중'
+      : '';
+    const trips = window.MapDuleFamily?.trips() || [];
+    const details = room?.eventId ? trips.filter((trip) => trip.eventId === room.eventId || trip.returnFor === room.eventId)
+      .map((trip) => window.MapDuleFamily.describeTrip(trip)).filter(Boolean) : [];
+    session.node.querySelector('.family-chat-live').innerHTML = details.map((detail) => `<p class="trip-status ${detail.tone}">${escapeHtml(detail.text)}</p>`).join('');
+  }
+
+  function selectRoom(session, roomKey) {
+    if (!session.rooms.some((room) => room.key === roomKey)) return;
+    session.drafts[session.roomKey] = session.node.querySelector('textarea').value;
+    session.roomKey = roomKey;
+    session.messages = [];
+    session.loaded = false;
+    session.signature = null;
+    session.pollError = '';
+    session.sendError = '';
+    session.node.querySelector('textarea').value = session.drafts[roomKey] || '';
+    renderMessages(session);
+    renderRooms(session);
+    refresh(session);
+  }
+
   function dispose() {
     if (!current) return;
     clearTimeout(current.timer);
     current.node.remove();
+    document.querySelectorAll('.chat-badge').forEach((badge) => badge.remove());
     current = null;
   }
 
-  function mount(slot, { api, familyId, me }) {
+  function mount(slot, { api, familyId, me, rooms = [] }) {
     if (!current || current.familyId !== familyId || current.me !== me) {
       dispose();
       const node = document.createElement('section');
@@ -23,19 +96,26 @@
       node.setAttribute('aria-label', '가족 채팅');
       node.innerHTML = `
         <div class="family-chat-heading"><h2><span class="material-symbols-rounded">forum</span>가족 채팅</h2><small>최근 200개 메시지</small></div>
+        <div class="family-chat-rooms" role="tablist" aria-label="대화방"></div>
+        <div class="family-chat-room-info" role="status"></div>
+        <div class="family-chat-live"></div>
         <div class="family-chat-log" role="log" aria-label="가족 대화" aria-live="polite" aria-relevant="additions"></div>
         <div class="family-chat-status" role="status"></div>
         <button type="button" class="family-chat-retry" hidden>다시 불러오기</button>
         <form class="family-chat-form">
-          <label class="family-chat-label"><span class="family-chat-label-row"><span>가족에게 메시지</span><small class="family-chat-count" aria-hidden="true">0 / 1,000자</small></span><textarea name="message" rows="2" maxlength="1000" required aria-describedby="family-chat-hint" placeholder="가족에게 메시지를 남겨 보세요"></textarea></label>
-          <div class="family-chat-toolbar"><button type="button" class="family-chat-toggle" aria-expanded="false" aria-controls="family-chat-emoji-picker" aria-label="이모지 선택" title="이모지 선택 · 이스케이프 키로 닫기"><span class="family-chat-emoji">\u{1F600}</span> 이모지</button><small id="family-chat-hint">최대 1,000자 · 엔터로 전송 · 시프트+엔터로 줄바꿈</small><button type="submit" class="family-chat-send" disabled>보내기</button></div>
+          <label class="family-chat-label"><span class="family-chat-label-row"><span>메시지</span><small class="family-chat-count" aria-hidden="true">0 / 500자</small></span><textarea name="message" rows="2" maxlength="500" required aria-describedby="family-chat-hint" placeholder="메시지를 남겨 보세요"></textarea></label>
+          <div class="family-chat-toolbar"><button type="button" class="family-chat-toggle" aria-expanded="false" aria-controls="family-chat-emoji-picker" aria-label="이모지 선택" title="이모지 선택 · 이스케이프 키로 닫기"><span class="family-chat-emoji">\u{1F600}</span> 이모지</button><small id="family-chat-hint">최대 500자 · 엔터로 전송 · 시프트+엔터로 줄바꿈</small><button type="submit" class="family-chat-send" disabled>보내기</button></div>
           <div class="family-chat-picker" id="family-chat-emoji-picker" role="group" aria-label="간단한 이모지" hidden>${EMOJIS.map(([emoji, label]) => `<button type="button" class="family-chat-emoji" data-chat-emoji="${emoji}" aria-label="${label}">${emoji}</button>`).join('')}</div>
         </form>`;
       const session = {
         node, api, familyId, me, messages: [], loaded: false, loading: false, sending: false,
-        timer: null, signature: '', pollError: '', sendError: ''
+        timer: null, signature: '', pollError: '', sendError: '', roomKey: 'family', rooms, drafts: {}
       };
       current = session;
+      node.querySelector('.family-chat-rooms').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-chat-room]');
+        if (button && button.dataset.chatRoom !== session.roomKey) selectRoom(session, button.dataset.chatRoom);
+      });
       const input = node.querySelector('textarea');
       const form = node.querySelector('form');
       const toggle = node.querySelector('.family-chat-toggle');
@@ -49,7 +129,7 @@
         if (!button) return;
         const emoji = button.dataset.chatEmoji;
         if (input.value.length - (input.selectionEnd - input.selectionStart) + emoji.length > input.maxLength) {
-          session.sendError = '메시지는 1,000자까지 입력할 수 있어요.';
+          session.sendError = '메시지는 500자까지 입력할 수 있어요.';
           updateStatus(session);
           return;
         }
@@ -81,7 +161,11 @@
       });
       node.querySelector('.family-chat-retry').addEventListener('click', () => refresh(session));
     }
+    current.rooms = rooms;
+    if (!rooms.some((room) => room.key === current.roomKey)) selectRoom(current, 'family');
     slot.replaceWith(current.node);
+    renderRooms(current);
+    markSeen(current);
     if (!current.timer && !current.loading) refresh(current);
   }
 
@@ -99,7 +183,7 @@
     button.disabled = session.sending || !input.value.trim();
     button.textContent = session.sending ? '보내는 중…' : '보내기';
     session.node.querySelector('form').setAttribute('aria-busy', String(session.sending));
-    session.node.querySelector('.family-chat-count').textContent = `${input.value.length.toLocaleString('ko-KR')} / 1,000자`;
+    session.node.querySelector('.family-chat-count').textContent = `${input.value.length.toLocaleString('ko-KR')} / 500자`;
   }
 
   function renderMessages(session) {
@@ -118,7 +202,7 @@
     }
     for (const message of session.messages) {
       const item = document.createElement('article');
-      item.className = `family-chat-message${message.senderId === session.me ? ' is-mine' : ''}`;
+      item.className = `family-chat-message${message.senderId === session.me ? ' is-mine' : ''}${message.system ? ' is-system' : ''}`;
       const name = document.createElement('b');
       name.textContent = message.senderId === session.me ? '나' : message.senderName;
       const text = document.createElement('div');
@@ -143,7 +227,7 @@
       session.timer = null;
       if (document.visibilityState === 'visible' && session.node.closest('.view.active')) refresh(session);
       else schedule(session);
-    }, 5000);
+    }, 3000);
   }
 
   async function refresh(session) {
@@ -151,24 +235,36 @@
     clearTimeout(session.timer);
     session.timer = null;
     session.loading = true;
+    const roomKey = session.roomKey;
     const previousMessages = session.messages;
     updateStatus(session);
     try {
-      const result = await session.api('messages', { method: 'GET' });
-      if (current !== session) return;
+      const after = session.messages.at(-1)?.id;
+      const result = await session.api('chat', { method: 'GET', query: { room: roomKey, ...(after ? { after } : {}) } });
+      if (current !== session || session.roomKey !== roomKey) return;
       // 이전 조회 도중 전송이 끝난 메시지는 유지한다.
       const addedWhileLoading = session.messages.filter((message) => !previousMessages.some((old) => old.id === message.id));
-      const messages = new Map(result.messages.map((message) => [message.id, message]));
+      const messages = new Map([...session.messages, ...result.messages].map((message) => [message.id, message]));
       for (const message of addedWhileLoading) messages.set(message.id, message);
-      session.messages = [...messages.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(-200);
+      session.messages = [...messages.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(roomKey === 'family' ? -200 : -300);
       renderMessages(session);
+      markSeen(session);
+      renderRooms(session);
       session.loaded = true;
       session.pollError = '';
     } catch (error) {
-      if (current === session) session.pollError = `대화를 갱신하지 못했어요. ${error.message}`;
+      if (current === session && session.roomKey === roomKey) {
+        if (error.code === 'ROOM_CLOSED' || error.code === 'NOT_IN_ROOM') {
+          showToast(error.message, 'info');
+          session.rooms = session.rooms.filter((room) => room.key !== roomKey);
+          selectRoom(session, 'family');
+          window.MapDuleFamily?.refresh();
+        } else session.pollError = `대화를 갱신하지 못했어요. ${error.message}`;
+      }
     } finally {
       session.loading = false;
       if (current === session) {
+        if (session.roomKey !== roomKey) { refresh(session); return; }
         updateStatus(session);
         schedule(session);
       }
@@ -186,19 +282,22 @@
       return;
     }
     session.sending = true;
+    const roomKey = session.roomKey;
     session.sendError = '';
     updateStatus(session);
     try {
-      const { message } = await session.api('message', { body: { text } });
-      if (current !== session) return;
+      const { message } = await session.api('chat-send', { body: { room: roomKey, text } });
+      if (current !== session || session.roomKey !== roomKey) return;
       session.messages = [...session.messages.filter((item) => item.id !== message.id), message]
         .sort((a, b) => a.id.localeCompare(b.id)).slice(-200);
       renderMessages(session);
+      markSeen(session);
+      renderRooms(session);
       if (input.value === text) input.value = '';
       const log = session.node.querySelector('.family-chat-log');
       log.scrollTop = log.scrollHeight;
     } catch (error) {
-      if (current === session) session.sendError = `메시지를 보내지 못했어요. ${error.message}`;
+      if (current === session && session.roomKey === roomKey) session.sendError = `메시지를 보내지 못했어요. ${error.message}`;
     } finally {
       session.sending = false;
       if (current === session) {
@@ -207,7 +306,10 @@
     }
   }
 
-  window.MapDuleFamilyChat = { mount, dispose };
+  window.MapDuleFamilyChat = { mount, dispose, updateBadges, openRoom: (key) => {
+    showView('family');
+    if (current) { selectRoom(current, key); current.node.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+  } };
 })();
 
 // MapDule 가족 공유 기능
@@ -222,10 +324,16 @@
   const ACTIVITY_KEY = 'mapdule-family-activity';
   const COMPLETED_KEY = 'mapdule-family-completed';
   const GEOCODE_CACHE_KEY = 'mapdule-geocode-cache';
+  const DEPART_ALARM_KEY = 'mapdule-depart-alarm';
+  const HOME_PLACE_KEY = 'mapdule-home-place';
   const POLL_INTERVAL_MS = 60000;
+  const POLL_ACTIVE_MS = 15000;
   const SEND_INTERVAL_MS = 20000;
   const HEARTBEAT_MS = 60000;
   const MAX_TRACKING_ACCURACY_METERS = 100;
+  const FALLBACK_ACCURACY_METERS = 500;
+  const FALLBACK_AFTER_MS = 60000;
+  const MAX_START_ACCURACY_METERS = 2000;
   const MAX_LOCATION_SPEED_METERS_PER_SECOND = 60;
   const MIN_MOVE_METERS = 25;
   const STALE_LOCATION_MS = 5 * 60 * 1000;
@@ -233,7 +341,7 @@
   const SPEED_KMH = { walk: [4.5, 4.5], transit: [20, 70], car: [25, 85] };
   const MODE_LABELS = { walk: '도보', transit: '대중교통', car: '자동차' };
   const MODE_ICONS = { walk: 'directions_walk', transit: 'directions_subway', car: 'directions_car' };
-  const ACTIVITY_ICONS = { departed: 'near_me', arrived: 'where_to_vote', completed: 'task_alt', dayDone: 'celebration' };
+  const ACTIVITY_ICONS = { departed: 'near_me', arrived: 'where_to_vote', completed: 'task_alt', dayDone: 'celebration', home: 'home', noShow: 'warning' };
 
   let credential = readText(CREDENTIAL_KEY);
   let state = credential ? readJson(STATE_CACHE_KEY, null) : null;
@@ -308,12 +416,12 @@
 
   function eventStart(event) {
     if (!event || event.allDay) return null;
-    return new Date(`${event.date}T${event.startTime}:00`);
+    return new Date(`${event.date}T${event.startTime}:00+09:00`);
   }
 
   function eventEnd(event) {
     if (!event || event.allDay) return null;
-    return new Date(`${event.date}T${event.endTime}:00`);
+    return new Date(`${event.date}T${event.endTime}:00+09:00`);
   }
 
   // 직선거리에 우회 계수를 곱한 대략적인 예상 시간. 실제 길찾기 API가 아니므로 화면에 '약'으로 표시한다.
@@ -419,6 +527,9 @@
     writeJson(ACTIVE_TRIP_KEY, null);
     writeJson(ACTIVITY_KEY, null);
     writeJson(COMPLETED_KEY, null);
+    writeJson(DEPART_ALARM_KEY, null);
+    document.querySelector('.depart-alarm-backdrop')?.remove();
+    alarmOpen = false;
     if (callServer && previous) {
       fetch('/api/family/leave', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-mapdule-member': previous }, body: '{}' }).catch(() => {});
     }
@@ -453,10 +564,12 @@
       const previous = before.get(trip.memberId);
       const place = trip.destination?.name && trip.destination.name !== trip.title ? ` → ${trip.destination.name}` : '';
       if ((!previous || previous.id !== trip.id) && trip.status === 'moving') {
-        entries.push({ type: 'departed', memberId: trip.memberId, at: trip.startedAt, text: `${name}님이 출발했어요 · ${trip.title}${place}` });
+        entries.push({ type: 'departed', memberId: trip.memberId, at: trip.startedAt,
+          text: trip.returnFor ? `${name}님이 집으로 출발했어요 · ${trip.title}` : `${name}님이 출발했어요 · ${trip.title}${place}` });
       }
       if (trip.status === 'arrived' && (!previous || previous.id !== trip.id || previous.status !== 'arrived')) {
-        entries.push({ type: 'arrived', memberId: trip.memberId, at: trip.endedAt || trip.updatedAt, text: `${name}님이 도착했어요 · ${trip.destination?.name || trip.title}` });
+        entries.push({ type: trip.returnFor ? 'home' : 'arrived', memberId: trip.memberId, at: trip.endedAt || trip.updatedAt,
+          text: trip.returnFor ? `${name}님이 집에 왔어요 · ${trip.title}` : `${name}님이 도착했어요 · ${trip.destination?.name || trip.title}` });
       }
     }
     return entries;
@@ -471,13 +584,18 @@
       const member = memberById(id);
       if (!member) return null;
       const arrivedAt = event.arrivals?.[id] || null;
+      const homeAt = event.homeArrivals?.[id] || null;
       const trip = trips().find((item) => item.memberId === id && item.eventId === event.id);
+      const homeTrip = trips().find((item) => item.memberId === id && item.returnFor === event.id && item.status === 'moving');
       let status = 'waiting';
-      if (arrivedAt && end && now >= end) status = 'done';
+      if (homeAt) status = 'home';
+      else if (homeTrip) status = 'homing';
+      else if (arrivedAt && end && now >= end) status = 'done';
       else if (arrivedAt) status = 'arrived';
       else if (trip?.status === 'moving') status = 'moving';
+      else if (event.noShow?.[id] && !event.departures?.[id]) status = 'noshow';
       else if (end && now >= end) status = 'nodata';
-      return { member, status, arrivedAt };
+      return { member, status, arrivedAt, homeAt };
     }).filter(Boolean);
   }
 
@@ -493,7 +611,7 @@
       if (!end || end.getTime() < oldest || end > new Date()) continue;
       for (const progress of eventProgress(event)) {
         const key = `${event.id}:${progress.member.id}`;
-        if (progress.status !== 'done' || progress.member.id === me() || notified.has(key)) continue;
+        if (!['done', 'home', 'homing'].includes(progress.status) || !progress.arrivedAt || progress.member.id === me() || notified.has(key)) continue;
         notified.add(key);
         finished.push({
           type: 'completed',
@@ -509,7 +627,7 @@
       const key = `day:${today}:${member.id}`;
       const theirs = todays.filter((event) => event.participants?.includes(member.id));
       if (member.id === me() || !theirs.length || notified.has(key)) continue;
-      const allDone = theirs.every((event) => eventProgress(event).find((item) => item.member.id === member.id)?.status === 'done');
+      const allDone = theirs.every((event) => ['done', 'home', 'homing'].includes(eventProgress(event).find((item) => item.member.id === member.id)?.status));
       if (!allDone) continue;
       notified.add(key);
       dayDone.push({ type: 'dayDone', memberId: member.id, at: new Date().toISOString(), text: `${member.name}님이 오늘 일정 ${theirs.length}개를 모두 마쳤어요` });
@@ -528,7 +646,20 @@
         if (!credential) return null;
         const eventsChanged = next.events !== null;
         const changes = detectTripChanges(state?.trips, next.trips, next.members);
+        const previousRooms = state?.rooms;
         state = { ...next, events: eventsChanged ? next.events : state?.events || [] };
+        if (previousRooms) {
+          for (const room of state.rooms || []) {
+            const old = previousRooms.find((item) => item.key === room.key);
+            if (room.lastId && room.lastId !== old?.lastId && room.lastMemberId !== state.me && currentViewId() !== 'family') {
+              showToast(`${room.title}: ${room.lastText}`, 'info');
+              if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+                try { new Notification(room.title, { body: room.lastText, tag: room.key }); } catch {}
+              }
+            }
+          }
+        }
+        window.MapDuleFamilyChat?.updateBadges(state.rooms || [], state.me, state.family.id);
         writeJson(STATE_CACHE_KEY, state);
         recordActivity(changes);
         syncTrackingWithServer();
@@ -552,10 +683,11 @@
   function schedulePoll() {
     clearTimeout(pollTimer);
     if (!credential) return;
+    const active = currentViewId() === 'family' || trips().some((trip) => trip.status === 'moving');
     pollTimer = setTimeout(async () => {
       if (document.visibilityState === 'visible') await refresh();
       schedulePoll();
-    }, POLL_INTERVAL_MS);
+    }, active ? POLL_ACTIVE_MS : POLL_INTERVAL_MS);
   }
 
   function afterStateChange(eventsChanged) {
@@ -568,6 +700,7 @@
     updateStatusPill();
     renderFamilyView();
     updateDayMap();
+    checkDepartureAlarms();
     schedulePoll();
   }
 
@@ -588,14 +721,25 @@
 
   // ---------- 가족 일정 ----------
 
-  async function saveEvent(event) {
+  async function reloadAllEvents() {
+    if (refreshing) await refreshing;
+    if (state) state.eventsRev = null;
+    await refresh({ quiet: false });
+  }
+
+  async function saveEvent(event, scope = 'series') {
     if (!isJoined()) throw new Error('먼저 가족에 참여해 주세요.');
     const payload = { ...event };
     delete payload.calendarId;
     delete payload.category;
     delete payload.source;
     if (!payload.location || (payload.place && payload.place.name !== payload.location)) payload.place = null;
-    const { event: saved } = await api('event', { body: { event: payload } });
+    const wasSeries = state.events?.some((item) => item.id === event.id && item.seriesId);
+    const { event: saved, series } = await api('event', { body: { event: payload, scope } });
+    if (wasSeries || series || !saved) {
+      await reloadAllEvents();
+      return saved;
+    }
     state.events = [...(state.events || []).filter((item) => item.id !== saved.id), saved];
     writeJson(STATE_CACHE_KEY, state);
     afterStateChange(true);
@@ -603,8 +747,12 @@
     return saved;
   }
 
-  async function deleteEvent(id) {
-    await api('event-delete', { body: { id } });
+  async function deleteEvent(id, scope = 'one') {
+    await api('event-delete', { body: { id, scope } });
+    if (scope === 'series') {
+      await reloadAllEvents();
+      return;
+    }
     state.events = (state.events || []).filter((item) => item.id !== id);
     writeJson(STATE_CACHE_KEY, state);
     afterStateChange(true);
@@ -681,7 +829,7 @@
       actionLabel: '위치 공유 시작'
     }).then((position) => {
       const accuracy = position.coords.accuracy;
-      if (!Number.isFinite(accuracy) || accuracy > MAX_TRACKING_ACCURACY_METERS) {
+      if (!Number.isFinite(accuracy) || accuracy > MAX_START_ACCURACY_METERS) {
         throw new Error(`위치 정확도가 낮아요${Number.isFinite(accuracy) ? ` (약 ${Math.round(accuracy)}m)` : ''}. 위치 신호가 더 좋은 곳에서 다시 시도해 주세요.`);
       }
       return position;
@@ -708,7 +856,7 @@
 
   function startWatching(tripId) {
     stopWatching();
-    tracking = { tripId, watchId: null, timer: null, pending: [], lastQueued: myTrip()?.points?.at(-1) || null, lastSentAt: Date.now(), sending: false, sendPromise: null, wakeLock: null };
+    tracking = { tripId, watchId: null, timer: null, pending: [], lastQueued: myTrip()?.points?.at(-1) || null, lastRealAt: Date.parse(myTrip()?.points?.at(-1)?.at || '') || Date.now(), lastSentAt: Date.now(), sending: false, sendPromise: null, wakeLock: null };
     tracking.timer = setInterval(() => {
       if (!tracking) return;
       const last = tracking.lastQueued;
@@ -722,16 +870,20 @@
     tracking.watchId = navigator.geolocation.watchPosition((position) => {
       if (!tracking) return;
       const point = toPoint(position);
-      if (!Number.isFinite(point.accuracy) || point.accuracy > MAX_TRACKING_ACCURACY_METERS) return;
+      if (!Number.isFinite(point.accuracy) || point.accuracy < 0) return;
       const last = tracking.lastQueued;
+      const sinceReal = Date.parse(point.at) - tracking.lastRealAt;
+      if (point.accuracy > MAX_TRACKING_ACCURACY_METERS
+        && (point.accuracy > FALLBACK_ACCURACY_METERS || sinceReal < FALLBACK_AFTER_MS)) return;
       const moved = last ? distanceMeters(last, point) : Infinity;
       const elapsed = last ? Date.parse(point.at) - Date.parse(last.at) : Infinity;
       if (last && elapsed <= 0) return;
-      if (last && moved > elapsed / 1000 * MAX_LOCATION_SPEED_METERS_PER_SECOND + point.accuracy + (last.accuracy || 0)) return;
+      if (last && moved > Math.max(sinceReal, elapsed) / 1000 * MAX_LOCATION_SPEED_METERS_PER_SECOND + point.accuracy + (last.accuracy || 0)) return;
       if (moved >= MIN_MOVE_METERS || elapsed >= SEND_INTERVAL_MS) {
         tracking.pending.push(point);
         tracking.pending = tracking.pending.slice(-30);
         tracking.lastQueued = point;
+        tracking.lastRealAt = Date.parse(point.at);
       }
       if (Date.now() - tracking.lastSentAt >= SEND_INTERVAL_MS || tracking.pending.length >= 10) flushPoints();
     }, () => {
@@ -803,7 +955,7 @@
     }
   }
 
-  async function startTrip({ eventId = null, title, destination = null, destinationText = '', mode }) {
+  async function startTrip({ eventId = null, returnFor = null, title, destination = null, destinationText = '', mode }) {
     if (!isJoined()) {
       showToast('먼저 가족을 만들거나 초대 코드로 참여해 주세요.', 'info');
       showView('family');
@@ -824,6 +976,7 @@
       const { trip } = await api('trip-start', {
         body: {
           eventId,
+          returnFor,
           title: title || destinationText || '이동 중',
           destination: place ? { ...place, name: destinationText || place.name } : null,
           mode: travelMode,
@@ -841,6 +994,7 @@
       }
       mapFittedOnce = false;
       afterStateChange(false);
+      refresh();
     } catch (error) {
       if (error.code !== 'LOCATION_CANCELLED') showToast(error.message || '출발을 알리지 못했어요.', 'info');
     } finally {
@@ -866,6 +1020,7 @@
       stopTracking();
       if (!silent) showToast(reason === 'arrived' ? '도착을 가족에게 알렸어요.' : '위치 공유를 멈췄어요. 지나온 경로도 지웠어요.', 'success');
       afterStateChange(false);
+      refresh();
     } catch (error) {
       if (!silent) showToast(error.message, 'info');
     }
@@ -890,6 +1045,7 @@
     const end = eventEnd(event);
     if (end && end < new Date()) return false;
     const trip = myTrip();
+    if (event.arrivals?.[me()]) return false;
     return !(trip?.status === 'moving' && trip.eventId && trip.eventId === event.id);
   }
 
@@ -918,6 +1074,9 @@
   function eventExtrasHtml(event) {
     if (!isJoined()) return '';
     let html = '';
+    if (event.seriesId && event.repeatDays?.length) {
+      html += `<p class="repeat-note"><span class="material-symbols-rounded">repeat</span>매주 ${event.repeatDays.map((day) => ['일', '월', '화', '수', '목', '금', '토'][day]).join('·')}${event.detached ? ' · 이 날만 변경' : ''}</p>`;
+    }
     if (event.source === 'family' && event.participants?.length) {
       html += `<div class="participant-row">${event.participants.map((id) => {
         const member = memberById(id);
@@ -931,21 +1090,30 @@
         html += `<p class="trip-status done"><span class="material-symbols-rounded">task_alt</span>${escapeHtml(`${who} · ${formatClock(progress.arrivedAt)} 도착, ${event.endTime} 일정 완료`)}</p>`;
       } else if (progress.status === 'arrived') {
         html += `<p class="trip-status arrived"><span class="material-symbols-rounded">where_to_vote</span>${escapeHtml(`${who} · ${formatClock(progress.arrivedAt)} 도착 · ${event.endTime}까지 일정 진행 중`)}</p>`;
+      } else if (progress.status === 'home') {
+        html += `<p class="trip-status done"><span class="material-symbols-rounded">home</span>${escapeHtml(`${who} · ${formatClock(progress.homeAt)} 집 도착`)}</p>`;
+      } else if (progress.status === 'noshow') {
+        html += `<p class="trip-status late"><span class="material-symbols-rounded">warning</span>${escapeHtml(who)} · 아직 출발하지 않았어요</p>`;
       }
     }
-    const related = trips().filter((trip) => (trip.eventId && trip.eventId === event.id)
+    const related = trips().filter((trip) => (trip.eventId && trip.eventId === event.id) || trip.returnFor === event.id
       || (trip.memberId === me() && !trip.eventId && trip.title === event.title && trip.startedAt?.slice(0, 10) === event.date));
     for (const trip of related) {
-      if (trip.status === 'arrived' && event.arrivals?.[trip.memberId]) continue;
+      if (trip.status === 'arrived' && (event.arrivals?.[trip.memberId] || trip.returnFor)) continue;
       const info = describeTrip(trip);
       if (info) html += `<p class="trip-status ${info.tone}"><span class="material-symbols-rounded">${info.icon}</span>${escapeHtml(info.text)}</p>`;
     }
     const mine = myTrip();
     if (mine?.status === 'moving' && related.includes(mine)) {
+      html += watchersHtml();
       html += '<div class="trip-actions"><button type="button" class="trip-arrive-button" data-trip-arrive>도착했어요</button><button type="button" class="trip-stop-button" data-trip-stop>공유 멈추기</button></div>';
     } else if (canDepartFor(event)) {
       html += `<button type="button" class="depart-button" data-depart-event="${escapeHtml(event.id)}"><span class="material-symbols-rounded">near_me</span>출발 알리기</button>`;
+    } else if (canReturnFor(event)) {
+      html += `<button type="button" class="depart-button home" data-return-event="${escapeHtml(event.id)}"><span class="material-symbols-rounded">home</span>집으로 출발</button>`;
     }
+    const room = state.rooms?.find((item) => item.eventId === event.id);
+    if (room) html += `<button type="button" class="room-open-button" data-open-room="${escapeHtml(room.key)}"><span class="material-symbols-rounded">forum</span>이동방 열기</button>`;
     return html;
   }
 
@@ -976,7 +1144,7 @@
       if (last && trip.status === 'moving' && Number.isFinite(last.accuracy)) {
         const accuracyCircle = new maps.Circle({
           center: latLng(last),
-          radius: Math.max(20, Math.min(last.accuracy, MAX_TRACKING_ACCURACY_METERS)),
+          radius: Math.max(20, Math.min(last.accuracy, MAX_START_ACCURACY_METERS)),
           strokeWeight: 1,
           strokeColor: color,
           strokeOpacity: 0.55,
@@ -1160,7 +1328,7 @@
       .slice(0, 4);
   }
 
-  const PROGRESS_LABELS = { waiting: '예정', moving: '이동 중', arrived: '도착', done: '완료', nodata: '기록 없음' };
+  const PROGRESS_LABELS = { waiting: '예정', moving: '이동 중', arrived: '도착', done: '완료', nodata: '기록 없음', noshow: '출발 안 함', homing: '집으로 가는 중', home: '집 도착' };
 
   function todayBoardHtml() {
     const today = localDateString(new Date());
@@ -1169,7 +1337,7 @@
       .sort((first, second) => (first.allDay ? '' : first.startTime).localeCompare(second.allDay ? '' : second.startTime));
     if (!list.length) return '';
     const tracked = list.filter((event) => eventProgress(event).length);
-    const done = tracked.filter((event) => eventProgress(event).every((item) => item.status === 'done')).length;
+    const done = tracked.filter((event) => eventProgress(event).every((item) => ['done', 'home', 'homing'].includes(item.status))).length;
     const allDone = tracked.length > 0 && done === tracked.length;
     const summary = allDone ? '오늘 가족 일정을 모두 마쳤어요' : `오늘 가족 일정 ${list.length}개${tracked.length ? ` · ${done}개 완료` : ''}`;
     return `<section class="family-today panel ${allDone ? 'all-done' : ''}">
@@ -1177,7 +1345,8 @@
       ${list.map((event) => `<div class="today-row">
         <time>${event.allDay ? '종일' : escapeHtml(event.startTime)}</time>
         <div><b>${escapeHtml(event.title)}</b>${event.location ? `<small>${escapeHtml(event.location)}</small>` : ''}
-          <div class="progress-chips">${eventProgress(event).map((item) => `<span class="progress-chip ${item.status}" style="--member-color:${item.member.color}">${escapeHtml(item.member.id === me() ? '나' : item.member.name)} · ${item.status === 'arrived' || item.status === 'done' ? `${formatClock(item.arrivedAt)} 도착${item.status === 'done' ? ' · 완료' : ''}` : PROGRESS_LABELS[item.status]}</span>`).join('')}</div>
+          <div class="progress-chips">${eventProgress(event).map((item) => `<span class="progress-chip ${item.status}" style="--member-color:${item.member.color}">${escapeHtml(item.member.id === me() ? '나' : item.member.name)} · ${item.status === 'home' ? `${formatClock(item.homeAt)} 집 도착` : item.status === 'arrived' || item.status === 'done' ? `${formatClock(item.arrivedAt)} 도착${item.status === 'done' ? ' · 완료' : ''}` : PROGRESS_LABELS[item.status]}</span>`).join('')}</div>
+          ${canReturnFor(event) ? `<button type="button" class="depart-button home" data-return-event="${escapeHtml(event.id)}"><span class="material-symbols-rounded">home</span>집으로 출발</button>` : ''}
         </div>
       </div>`).join('')}
     </section>`;
@@ -1197,11 +1366,13 @@
     section.dataset.mode = 'joined';
     section.innerHTML = `
       ${heading(state.family.name, `가족 ${members().length}명 · 서로의 일정과 이동을 함께 봐요`)}
+      ${state.scheduleWarning ? `<p role="status">${escapeHtml(state.scheduleWarning)}</p>` : ''}
       ${todayBoardHtml()}
       <section class="family-share panel ${sharing ? 'is-sharing' : ''}">
         ${sharing ? `
           <div class="share-live"><span class="live-dot"></span><b>내 위치 공유 중</b><small>${escapeHtml(mine.title)}${mine.destination ? ` → ${escapeHtml(mine.destination.name)}` : ''}</small></div>
           ${estimate ? `<p class="share-eta">약 <b>${estimate.minutes}분</b> 남음 · ${formatClock(estimate.arrival)} 도착 예상${estimate.meters <= 1000 ? ` · 목적지까지 약 ${formatDistance(estimate.meters)}` : ''}${estimate.lateMinutes ? ` <em>${estimate.lateMinutes}분 늦을 수 있어요</em>` : ''}</p>` : '<p class="share-eta">목적지가 없어 도착은 직접 눌러 주세요.</p>'}
+          ${watchersHtml()}
           <p class="share-note">${accuracyLabel} · ${tracking ? '화면을 켜 두면 위치가 더 정확하게 전달돼요.' : '이 기기에서 위치를 보내고 있지 않아요. 아래 버튼으로 다시 시작하세요.'}</p>
           <div class="trip-actions">
             ${tracking ? '' : '<button type="button" class="trip-resume-button" data-trip-resume>이 기기에서 계속 공유</button>'}
@@ -1238,7 +1409,7 @@
         <button type="button" class="link-button danger" data-leave-family><span class="material-symbols-rounded">logout</span>가족에서 나가기</button>
       </div>
     `;
-    window.MapDuleFamilyChat?.mount(section.querySelector('.family-chat-slot'), { api, familyId: state.family.id, me: me() });
+    window.MapDuleFamilyChat?.mount(section.querySelector('.family-chat-slot'), { api, familyId: state.family.id, me: me(), rooms: state.rooms || [{ key: 'family', kind: 'family', title: '가족방' }] });
     if (chatFocus?.isConnected) chatFocus.focus({ preventScroll: true });
     const slot = section.querySelector('.family-map-slot');
     if (mapCard) {
@@ -1327,6 +1498,18 @@
   });
 
   document.addEventListener('click', (event) => {
+    const roomButton = event.target.closest('[data-open-room]');
+    if (roomButton) {
+      event.stopPropagation();
+      window.MapDuleFamilyChat?.openRoom(roomButton.dataset.openRoom);
+      return;
+    }
+    const returnButton = event.target.closest('[data-return-event]');
+    if (returnButton) {
+      event.stopPropagation();
+      startReturnTrip(returnButton.dataset.returnEvent);
+      return;
+    }
     const depart = event.target.closest('[data-depart-event]');
     if (depart) {
       event.stopPropagation();
@@ -1401,6 +1584,9 @@
   }
 
   window.MapDuleFamily = {
+    rooms: () => state?.rooms || [],
+    trips,
+    describeTrip,
     isJoined,
     me,
     members,
@@ -1417,6 +1603,130 @@
     searchPlaces,
     updateDayMap
   };
+
+  let audioContext = null;
+  let alarmOpen = false;
+
+  document.addEventListener('pointerdown', () => {
+    try {
+      audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+      if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+    } catch {}
+  }, { passive: true });
+
+  function ringAlarm() {
+    try { navigator.vibrate?.([400, 200, 400]); } catch {}
+    if (audioContext?.state !== 'running') return;
+    for (let index = 0; index < 4; index += 1) {
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const start = audioContext.currentTime + index * 0.35;
+      oscillator.frequency.value = index % 2 ? 660 : 880;
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.exponentialRampToValueAtTime(0.15, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(start);
+      oscillator.stop(start + 0.28);
+    }
+  }
+
+  function showAlarm({ key, title, text, primary, onPrimary, snooze = true }) {
+    if (alarmOpen) return;
+    alarmOpen = true;
+    ringAlarm();
+    const previousFocus = document.activeElement;
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop depart-alarm-backdrop';
+    modal.innerHTML = `<section class="modal depart-alarm" role="alertdialog" aria-modal="true" aria-labelledby="depart-alarm-title"><span class="material-symbols-rounded">alarm</span><h2 id="depart-alarm-title">${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p><div class="depart-alarm-actions"><button type="button" data-alarm-snooze>${snooze ? '5분 뒤 다시 알림' : '확인'}</button><button type="button" data-alarm-primary>${escapeHtml(primary)}</button></div></section>`;
+    const remember = (entry) => writeJson(DEPART_ALARM_KEY, { ...readJson(DEPART_ALARM_KEY, {}), [key]: entry });
+    remember(snooze ? { snoozeUntil: Date.now() + 5 * 60000 } : { done: true });
+    const close = () => { modal.remove(); alarmOpen = false; previousFocus?.focus?.({ preventScroll: true }); };
+    modal.querySelector('[data-alarm-primary]').addEventListener('click', () => { close(); onPrimary(); });
+    modal.querySelector('[data-alarm-snooze]').addEventListener('click', () => {
+      remember(snooze ? { snoozeUntil: Date.now() + 5 * 60000 } : { done: true });
+      close();
+    });
+    modal.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      if (event.key === 'Tab') {
+        const buttons = [...modal.querySelectorAll('button')];
+        event.preventDefault();
+        const currentIndex = buttons.indexOf(document.activeElement);
+        buttons[(currentIndex + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus();
+      }
+    });
+    document.body.append(modal);
+    modal.querySelector('[data-alarm-primary]').focus();
+    if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+      try { new Notification(title, { body: text, tag: key }); } catch {}
+    }
+  }
+
+  function hasLeftFor(event, memberId) {
+    return Boolean(event.arrivals?.[memberId] || event.departures?.[memberId])
+      || trips().some((trip) => trip.memberId === memberId && trip.eventId === event.id && trip.status !== 'stopped');
+  }
+
+  function canReturnFor(event) {
+    const end = eventEnd(event);
+    return Boolean(isJoined() && event.returnHome && event.arrivals?.[me()] && !event.homeArrivals?.[me()]
+      && end && Date.now() >= end.getTime() && Date.now() <= end.getTime() + 2 * 60 * 60000
+      && !(myTrip()?.status === 'moving') && !trips().some((trip) => trip.returnFor === event.id && trip.memberId === me() && trip.status === 'arrived'));
+  }
+
+  async function startReturnTrip(eventId) {
+    const event = familyEvents().find((item) => item.id === eventId);
+    if (!event || !canReturnFor(event)) return;
+    const text = String(readJson('mapdule-profile', {}).home || '').trim();
+    const saved = readJson(HOME_PLACE_KEY, null);
+    const place = text && saved?.query === text && Number.isFinite(saved.lat) && Number.isFinite(saved.lng)
+      ? saved : text ? await geocode(text) : null;
+    if (place) writeJson(HOME_PLACE_KEY, { query: text, lat: place.lat, lng: place.lng });
+    else showToast('프로필에 정확한 집 위치가 없어 자동 도착 확인 없이 공유해요.', 'info');
+    await startTrip({ returnFor: event.id, title: `${event.title} → 집`, destination: place ? { lat: place.lat, lng: place.lng, name: '집' } : null });
+  }
+
+  function watchersHtml() {
+    const names = members().filter((member) => member.id !== me()).map((member) => member.name);
+    const label = names.length ? `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` 외 ${names.length - 3}명` : ''}에게 공유 중` : '아직 공유받을 가족이 없어요';
+    return `<p class="watchers-note"><span class="material-symbols-rounded">visibility</span>${escapeHtml(label)} · 도착하면 자동 종료</p>`;
+  }
+
+  function checkDepartureAlarms() {
+    if (!isJoined() || alarmOpen) return;
+    const alarmState = readJson(DEPART_ALARM_KEY, {});
+    const available = (key) => !alarmState[key]?.done && !(alarmState[key]?.snoozeUntil > Date.now());
+    for (const event of familyEvents()) {
+      const start = eventStart(event)?.getTime();
+      if (!start || !event.participants?.length) continue;
+      const due = start - (event.departNotice || 0) * 60000;
+      const prefix = `${state.family.id}:${event.id}:${event.date}:${event.startTime}:${event.departNotice}`;
+      if (event.departNotice && Date.now() >= due && Date.now() <= start + 30 * 60000 && Date.parse(event.createdAt) <= due) {
+        const selfKey = `self:${prefix}`;
+        if (event.participants.includes(me()) && !hasLeftFor(event, me()) && available(selfKey)) {
+          showAlarm({ key: selfKey, title: `${event.title} 갈 시간이에요`, text: `${event.startTime} 시작`, primary: '지금 출발', onPrimary: () => startTripForEvent(event.id) });
+          return;
+        }
+        for (const memberId of Object.keys(event.noShow || {})) {
+          const key = `noshow:${prefix}:${memberId}:${event.noShow[memberId]}`;
+          if (memberId === me() || hasLeftFor(event, memberId) || !available(key)) continue;
+          const name = memberById(memberId)?.name;
+          if (!name) continue;
+          showAlarm({ key, title: `${name}님이 아직 출발하지 않았어요`, text: `${event.title} · ${event.startTime} 시작`, primary: '가족방에서 물어보기', snooze: false,
+            onPrimary: () => window.MapDuleFamilyChat.openRoom('family') });
+          return;
+        }
+      }
+      const homeKey = `home:${prefix}:${event.endTime}`;
+      if (canReturnFor(event) && available(homeKey)) {
+        showAlarm({ key: homeKey, title: `${event.title} 끝! 집에 갈 시간이에요`, text: '집으로 이동 공유', primary: '집으로 출발', onPrimary: () => startReturnTrip(event.id) });
+        return;
+      }
+    }
+  }
+
+  setInterval(checkDepartureAlarms, 20000);
 
   // ---------- 시작 ----------
   checkServer();

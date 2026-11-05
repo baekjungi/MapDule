@@ -1,13 +1,15 @@
 const { app } = require('@azure/functions');
 const { getAiStatus, parseSchedulePrompt, analyzeSchedulePlan } = require('../ai-schedule');
 const { readLimitedBody } = require('../request-body');
+const { runAiRequest } = require('../ai-access');
 
-function jsonResponse(status, body) {
+function jsonResponse(status, body, retryAfter = 60) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store'
+      'Cache-Control': 'no-store',
+      ...(status === 429 ? { 'Retry-After': String(retryAfter) } : {})
     }
   });
 }
@@ -29,13 +31,14 @@ async function handleAiRequest(request, context, operation, label) {
     return jsonResponse(400, { error: '요청 본문 형식이 올바르지 않습니다.', code: 'INVALID_REQUEST' });
   }
   try {
-    return jsonResponse(200, await operation(body));
+    const clientKey = (request.headers.get('x-forwarded-for') || '').split(',').at(-1)?.trim() || 'unknown';
+    return jsonResponse(200, await runAiRequest(clientKey, () => operation(body)));
   } catch (error) {
     context.error(`${label} request failed (${error.code || 'UNKNOWN'}).`);
     return jsonResponse(error.statusCode || 500, {
       error: error.message,
       ...(error.code ? { code: error.code } : {})
-    });
+    }, error.retryAfter);
   }
 }
 
@@ -43,7 +46,7 @@ app.http('ai-status', {
   methods: ['GET'],
   authLevel: 'anonymous',
   route: 'ai/status',
-  handler: async () => jsonResponse(200, { ...getAiStatus(), authRequired: true })
+  handler: async () => jsonResponse(200, { ...getAiStatus(), authRequired: false })
 });
 
 app.http('ai-parse', {

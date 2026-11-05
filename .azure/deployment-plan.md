@@ -1,10 +1,10 @@
 # MapDule production update
 
-Status: Validated
+Status: Approved
 
 ## 1. Scope and approval
 
-The user requested fixing the AI HTML/JSON response error and deploying the integrated application on 2026-11-05.
+The user requested allowing AI access without a Microsoft account on 2026-11-05.
 Update the existing application only. Preserve the existing design, family chat, Korean UI and server reliability fixes.
 Do not create, delete or reconfigure Azure infrastructure or expose application secrets.
 
@@ -28,11 +28,10 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 
 ## 4. Changes
 
-- Handle 401/403 and authentication redirects before attempting JSON parsing.
-- Show Korean sign-in links for protected AI parse and plan calls.
-- Handle HTML and malformed JSON responses explicitly without raw parser errors.
-- Keep authenticated-only access on AI parse and plan routes.
-- Include previously integrated family chat, Korean UI and server fixes.
+- Allow anonymous access on AI parse and plan routes and advertise authRequired: false.
+- Keep server-side API keys and existing HTML/JSON error handling.
+- Apply shared per-IP minute/day limits and per-instance concurrency limits to both AI operations.
+- Preserve in-progress family/UI edits made by another agent; deploy only files from this request.
 
 ## 5. Validation
 
@@ -41,18 +40,34 @@ Do not switch to azd, create an environment or generate replacement infrastructu
   - [x] Full regression suite: npm test
   - [x] Public asset build: npm run build
   - [x] Whitespace: git diff --check
-  - [x] Browser: HTML 401, HTML gateway response, malformed JSON, JSON success and input preservation
+  - [x] Anonymous Functions status/parse/plan and shared request limit tests
   - [x] Existing pipeline and deployment token configuration
-  - [x] Static role verification: authenticated roles retained; no IaC or RBAC changes
+  - [x] Static role verification: guest routes enabled; API secrets remain server-side; no Azure RBAC changes
 
 ## 6. Deployment and verification
 
-Commit the verified integrated changes, push normally to main and monitor the matching GitHub Actions run.
-Verify production assets and endpoints, then reproduce the original unauthenticated scenario in the browser.
-Do not claim successful authenticated Azure OpenAI inference unless it has actually been exercised.
+Commit only the verified guest-access changes, push normally to main and monitor the matching GitHub Actions run.
+Verify production assets and endpoints, then exercise actual unauthenticated AI inference in the browser.
+Do not claim successful Azure OpenAI inference unless it has actually been exercised.
 Rollback, if needed, uses a normal revert commit after identifying the failed deployment; no destructive Git commands.
 
 ## 7. Validation Proof
+
+Guest-access validation: 2026-11-05, approximately 21:53 Asia/Seoul.
+
+- `npm run check`, `npm test`, `npm run build`, `git diff --check`: passed.
+- All 70 tests in the shared worktree passed, including five new guest/limiter tests
+  and concurrent family-workflow tests belonging to another agent.
+- Functions tests invoke both operations with no identity/cookie headers and confirm success.
+- Status test confirms `authRequired: false`.
+- Rate-limit tests verify exactly ten calls per minute, 100 per 24 hours, reset windows,
+  shared parse/plan counters, Retry-After, three concurrent operations and release on failure.
+- Existing deployment token name and live Static Web App hostname confirmed without reading secrets.
+- Static review confirms both AI routes explicitly permit the anonymous role, API keys
+  remain on the server and no Azure RBAC or infrastructure changes are included.
+- Only guest-access files are staged for deployment; uncommitted family/UI work is preserved.
+
+The results below are historical evidence for the preceding deployment.
 
 Validation date: 2026-11-05, approximately 21:42-21:44 Asia/Seoul.
 

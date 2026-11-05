@@ -5,11 +5,11 @@
   "routes": [
     {
       "route": "/api/ai/parse",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": ["anonymous"]
     },
     {
       "route": "/api/ai/plan",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": ["anonymous"]
     }
   ],
   "globalHeaders": {

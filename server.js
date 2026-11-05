@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getAiStatus, parseSchedulePrompt, analyzeSchedulePlan } = require('./api/src/ai-schedule');
 const { handleFamilyRequest } = require('./api/src/family-runtime');
+const { runAiRequest } = require('./api/src/ai-access');
 
 const root = __dirname;
 const envFile = path.join(root, '.env');
@@ -45,12 +46,12 @@ const mimeTypes = {
   '.ico': 'image/x-icon'
 };
 
-function sendJson(response, statusCode, payload) {
+function sendJson(response, statusCode, payload, retryAfter = 60) {
   response.writeHead(statusCode, {
     ...securityHeaders,
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    ...(statusCode === 429 ? { 'Retry-After': '60' } : {})
+    ...(statusCode === 429 ? { 'Retry-After': String(retryAfter) } : {})
   });
   response.end(JSON.stringify(payload));
 }
@@ -94,12 +95,12 @@ async function parseSchedule(request, response) {
     return;
   }
   try {
-    sendJson(response, 200, await parseSchedulePrompt(body.prompt));
+    sendJson(response, 200, await runAiRequest(request.socket.remoteAddress, () => parseSchedulePrompt(body.prompt)));
   } catch (error) {
     sendJson(response, error.statusCode || 500, {
       error: error.message,
       ...(error.code ? { code: error.code } : {})
-    });
+    }, error.retryAfter);
   }
 }
 
@@ -120,12 +121,12 @@ async function analyzeSchedule(request, response) {
     return;
   }
   try {
-    sendJson(response, 200, await analyzeSchedulePlan(body));
+    sendJson(response, 200, await runAiRequest(request.socket.remoteAddress, () => analyzeSchedulePlan(body)));
   } catch (error) {
     sendJson(response, error.statusCode || 500, {
       error: error.message,
       ...(error.code ? { code: error.code } : {})
-    });
+    }, error.retryAfter);
   }
 }
 
@@ -190,7 +191,7 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   if (requestUrl.pathname === '/api/ai/status' && request.method === 'GET') {
-    sendJson(response, 200, getAiStatus());
+    sendJson(response, 200, { ...getAiStatus(), authRequired: false });
     return;
   }
   if (requestUrl.pathname === '/api/ai/parse' && request.method === 'POST') {

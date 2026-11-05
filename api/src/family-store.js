@@ -17,6 +17,16 @@ function createMemoryStore(initialEntries = [], onChange = () => {}) {
     async get(partition, row) {
       return clone(entries.get(keyOf(partition, row)));
     },
+    async insert(partition, row, value) {
+      if (entries.has(keyOf(partition, row))) return false;
+      await this.put(partition, row, value);
+      return true;
+    },
+    async update(partition, row, transform) {
+      const value = transform(clone(entries.get(keyOf(partition, row))));
+      if (value !== null) await this.put(partition, row, value);
+      return value;
+    },
     async put(partition, row, value) {
       const key = keyOf(partition, row);
       const existed = entries.has(key);
@@ -172,6 +182,38 @@ function createTableStore(connectionString, tableName = 'mapdulefamily', fetchIm
         body: { PartitionKey: partition, RowKey: row, data: JSON.stringify(value) }
       });
       if (!response.ok) await fail(response, 'put');
+    },
+    async insert(partition, row, value) {
+      await ensureTable();
+      const response = await request('POST', `/${tableName}`, {
+        body: { PartitionKey: partition, RowKey: row, data: JSON.stringify(value) }
+      });
+      if (response.status === 409) return false;
+      if (!response.ok) await fail(response, 'insert');
+      return true;
+    },
+    async update(partition, row, transform) {
+      await ensureTable();
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const current = await request('GET', entityPath(partition, row));
+        if (!current.ok && current.status !== 404) await fail(current, 'read for update');
+        const entity = current.ok ? await current.json() : null;
+        const value = transform(entity ? JSON.parse(entity.data) : null);
+        if (value === null) return null;
+        if (!entity) {
+          if (await this.insert(partition, row, value)) return value;
+          continue;
+        }
+        const etag = current.headers.get('etag') || entity['odata.etag'];
+        if (!etag) throw new Error('Table storage update requires an ETag.');
+        const response = await request('PUT', entityPath(partition, row), {
+          body: { PartitionKey: partition, RowKey: row, data: JSON.stringify(value) },
+          headers: { 'If-Match': etag }
+        });
+        if (response.ok) return value;
+        if (response.status !== 412 && response.status !== 409) await fail(response, 'update');
+      }
+      throw new Error('Table storage update conflict. Please retry.');
     },
     async remove(partition, row) {
       await ensureTable();

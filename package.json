@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/stage-static.js",
     "start": "node server.js",
-    "check": "node --check app.js && node --check family.js && node --check server.js && node --check scripts/stage-static.js && node --check api/src/ai-schedule.js && node --check api/src/functions/ai.js && node --check api/src/functions/family.js && node --check api/src/request-body.js && node --check api/src/family-service.js && node --check api/src/family-chat.js && node --check api/src/family-store.js && node --check api/src/family-runtime.js",
+    "check": "node --check app.js && node --check family.js && node --check server.js && node --check scripts/stage-static.js && node --check api/src/ai-schedule.js && node --check api/src/ai-access.js && node --check api/src/functions/ai.js && node --check api/src/functions/family.js && node --check api/src/request-body.js && node --check api/src/family-service.js && node --check api/src/family-chat.js && node --check api/src/family-store.js && node --check api/src/family-runtime.js",
     "test": "node --test tests/*.test.js"
   },
   "engines": {

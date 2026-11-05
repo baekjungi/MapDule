@@ -196,3 +196,8 @@
 .family-chat-picker button{width:44px;height:44px;border-radius:10px;background:#f6f7fb;font-size:24px}
 .family-chat button:focus-visible{outline:2px solid var(--family,#ef7d57);outline-offset:2px}
 @media(max-width:480px){.family-chat{padding:14px}.family-chat-toolbar>small{flex-basis:100%;order:1}.family-chat-message{max-width:90%}}
+@media(max-width:680px){
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),textarea,select:not(.calendar-view-select){font-size:16px}
+body.calendar-visible .calendar-controls .text-icon{min-width:36px;min-height:36px}
+body.calendar-visible .calendar-today-button,body.calendar-visible .view-select-label{min-height:36px}
+}
