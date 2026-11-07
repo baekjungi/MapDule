@@ -32,7 +32,7 @@ function handlerFor(fileName, route) {
   return registrations.get(route).handler;
 }
 
-for (const [file, route] of [['ai.js', 'ai-parse'], ['family.js', 'family']]) {
+for (const [file, route] of [['ai.js', 'ai-parse'], ['family.js', 'family'], ['mobility.js', 'mobility-midpoint'], ['departure-push.js', 'push-schedule']]) {
   test(`${route} stops reading oversized chunked bodies at the size limit`, async () => {
     let pulls = 0;
     let cancelled = false;

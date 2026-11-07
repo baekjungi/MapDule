@@ -1,0 +1,12 @@
+{
+  "id": "/",
+  "name": "MapDule",
+  "short_name": "MapDule",
+  "lang": "ko",
+  "start_url": "/#today",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#216a50",
+  "background_color": "#ffffff",
+  "icons": [{ "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const server = require('../server');
 
-const AI_KEYS = ['AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_DEPLOYMENT', 'KAKAO_REST_API_KEY'];
+const AI_KEYS = ['AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_DEPLOYMENT', 'KAKAO_REST_API_KEY', 'ODSAY_API_KEY'];
 
 test('day plan over HTTP flags conflicts, tight moves and safe moves without any AI service', async (context) => {
   const saved = AI_KEYS.map((key) => process.env[key]);
@@ -39,6 +39,8 @@ test('day plan over HTTP flags conflicts, tight moves and safe moves without any
   assert.equal(plan.aiSummary, false);
   assert.deepEqual(plan.transitions.map((item) => item.status), ['ok', 'tight', 'conflict', 'unknown']);
   const [safe, tight] = plan.transitions;
+  assert.equal(safe.fallbackReason, 'not-configured');
+  assert.ok(safe.dataUpdatedAt);
   assert.equal(safe.recommendedDepartureTime, '10:46');
   assert.ok(tight.bufferMinutes < 0);
   assert.equal(tight.recommendedDepartureTime, `${String(Math.floor((12 * 60 + 10 - tight.travelMinutes - 10) / 60)).padStart(2, '0')}:${String((12 * 60 + 10 - tight.travelMinutes - 10) % 60).padStart(2, '0')}`);

@@ -407,6 +407,11 @@ async function analyzeSchedulePlan(body) {
         : formatClockMinutes(clockMinutes(transition.nextStartTime) - travelMinutes - 10),
       status: planStatus(transition.gapMinutes, bufferMinutes),
       routeSource: travel ? travel.method : null,
+      routeMeters: travel?.routeMeters ?? null,
+      walkingMinutes: travel?.walkingMinutes ?? null,
+      transferCount: travel?.transferCount ?? null,
+      dataUpdatedAt: travel?.dataUpdatedAt ?? null,
+      fallbackReason: travel?.fallbackReason ?? null,
       reason: travel ? travel.detail : '일정 장소의 위치가 없어 이동 시간을 계산하지 않았어요.'
     };
   });
@@ -417,6 +422,9 @@ async function analyzeSchedulePlan(body) {
   }
   if (checkedTransitions.some((item) => item.status === 'unknown')) {
     assumptions.push('위치가 없는 일정 사이의 이동 시간은 계산하지 않았어요.');
+  }
+  if (checkedTransitions.some((item) => item.routeSource === 'odsay-transit')) {
+    assumptions.push('대중교통 경로에는 도보가 포함돼요. 실시간 지연·첫차·막차는 길찾기에서 확인해 주세요.');
   }
   let summary = summarizePlanLocally(plan, checkedTransitions);
   let recommendations = recommendPlanLocally(checkedTransitions);

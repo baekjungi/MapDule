@@ -3,7 +3,7 @@ const path = require('node:path');
 
 const projectRoot = path.resolve(__dirname, '..');
 const outputDirectory = path.join(projectRoot, 'dist');
-const publicFiles = ['index.html', 'app.js', 'styles.css', 'family.js', 'family.css', 'staticwebapp.config.json'];
+const publicFiles = ['index.html', 'app.js', 'styles.css', 'family.js', 'family.css', 'departure-push.js', 'sw.js', 'manifest.webmanifest', 'app-icon.svg', 'staticwebapp.config.json'];
 
 fs.rmSync(outputDirectory, { recursive: true, force: true });
 fs.mkdirSync(outputDirectory, { recursive: true });

@@ -231,14 +231,7 @@ function clearDemoContent() {
   aiCta.textContent = '분석된 일정이 없습니다';
   document.querySelector('.manual-link').textContent = '오늘 화면으로 돌아가기';
 
-  document.querySelector('#midpoint-title').textContent = '약속 지점';
-  document.querySelector('#midpoint .section-heading p').textContent = '실제 교통 경로 API 연결 후 이용할 수 있어요.';
-  document.querySelector('.midpoint-hero h2').textContent = '중간 지점 계산은 준비 중이에요';
-  document.querySelector('.midpoint-hero p').textContent = '공정한 이동 시간 비교에는 실제 대중교통·도로 경로 데이터가 필요해요.';
-  document.querySelector('#midpoint .primary-cta')?.remove();
-  document.querySelector('.demo-result').outerHTML = `
-    <div class="empty-state panel"><span class="material-symbols-rounded">route</span><h2>실제 경로 계산이 아직 연결되지 않았어요</h2><p>교통 경로 API가 준비되면 참가자별 이동 시간과 중간 장소를 비교할 수 있어요.</p><button class="primary-cta" type="button" data-view="day-detail"><span class="material-symbols-rounded">map</span>오늘 지도 보기</button></div>
-  `;
+  initializeMidpoint();
 
   const manualView = document.createElement('section');
   manualView.id = 'manual';
@@ -280,6 +273,128 @@ function clearDemoContent() {
 }
 
 let weekDates = clearDemoContent();
+
+async function requestMobility(action, body) {
+  const response = await fetchWithTimeout(`/api/mobility/${action}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  if (!/^application\/json/i.test(response.headers.get('content-type') || '')) throw new Error('이동 서버 응답을 확인하지 못했어요.');
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '이동 요청에 실패했어요.');
+  return result;
+}
+
+function initializeMidpoint() {
+  const section = document.querySelector('#midpoint');
+  section.innerHTML = `
+    <div class="section-heading"><div class="section-icon green-bg"><span class="material-symbols-rounded">groups</span></div><div><h1 id="midpoint-title">약속 지점</h1><p>비교한 후보 중 이동 시간 차이가 작은 순서</p></div></div>
+    <form id="midpoint-form" class="midpoint-form">
+      <div class="midpoint-settings"><label class="form-field">이동 수단<select name="mode"><option value="transit">대중교통</option><option value="walk">도보</option><option value="car">자동차</option></select></label><label class="form-field">장소 종류<select name="category"><option value="cafe">카페</option><option value="restaurant">식당</option><option value="station">지하철역</option></select></label></div>
+      <div class="midpoint-heading"><h2>참가자 출발지</h2><button type="button" data-add="participant" title="참가자 추가" aria-label="참가자 추가"><span class="material-symbols-rounded">person_add</span></button></div>
+      <div id="midpoint-participants"></div>
+      <div class="midpoint-heading"><h2>후보 장소</h2><div><button type="button" id="midpoint-nearby"><span class="material-symbols-rounded">near_me</span>주변 후보</button><button type="button" data-add="candidate" title="후보 추가" aria-label="후보 추가"><span class="material-symbols-rounded">add_location_alt</span></button></div></div>
+      <div id="midpoint-candidates"></div>
+      <button type="submit" class="primary-cta"><span class="material-symbols-rounded">route</span>이동 시간 비교</button>
+    </form>
+    <p id="midpoint-status" role="status" aria-live="polite"></p><div id="midpoint-results"></div>`;
+  const form = section.querySelector('form');
+  const status = section.querySelector('#midpoint-status');
+  const results = section.querySelector('#midpoint-results');
+  const participants = section.querySelector('#midpoint-participants');
+  const candidates = section.querySelector('#midpoint-candidates');
+  let compared = [];
+  let busy = false;
+  const invalidate = () => { compared = []; results.replaceChildren(); status.textContent = ''; };
+  const limits = () => form.querySelectorAll('[data-add]').forEach((button) => {
+    button.disabled = busy || (button.dataset.add === 'participant' ? participants.children.length >= 6 : candidates.children.length >= 5);
+  });
+  const addRow = (type, seed = null) => {
+    const container = type === 'participant' ? participants : candidates;
+    if (container.children.length >= (type === 'participant' ? 6 : 5)) return;
+    const row = document.createElement('fieldset');
+    row.className = 'midpoint-place';
+    row.innerHTML = `<legend>${type === 'participant' ? '참가자' : '후보'}</legend>
+      ${type === 'participant' ? '<label class="form-field">이름<input data-name maxlength="80" required placeholder="이름"></label>' : ''}
+      <label class="form-field">${type === 'participant' ? '출발 장소' : '장소'}<div class="midpoint-search"><input data-query maxlength="120" required placeholder="장소명 또는 주소"><button type="button" data-search title="장소 검색" aria-label="장소 검색"><span class="material-symbols-rounded">search</span></button><button type="button" data-remove title="삭제" aria-label="삭제"><span class="material-symbols-rounded">close</span></button></div></label>
+      <div data-search-results class="midpoint-search-results"></div>
+      <details><summary>위도·경도</summary><div class="midpoint-coordinates"><label class="form-field">위도<input data-lat type="number" min="-90" max="90" step="any"></label><label class="form-field">경도<input data-lng type="number" min="-180" max="180" step="any"></label></div></details>`;
+    container.append(row);
+    const query = row.querySelector('[data-query]');
+    const latitude = row.querySelector('[data-lat]');
+    const longitude = row.querySelector('[data-lng]');
+    const matches = row.querySelector('[data-search-results]');
+    const select = (place) => { query.value = place.name; latitude.value = place.place.lat; longitude.value = place.place.lng; matches.textContent = place.address || '위치 선택됨'; invalidate(); };
+    query.addEventListener('input', () => { latitude.value = ''; longitude.value = ''; matches.replaceChildren(); });
+    row.querySelector('[data-search]').addEventListener('click', async (event) => {
+      if (!query.value.trim()) return query.focus();
+      const button = event.currentTarget;
+      const searched = query.value;
+      button.disabled = true;
+      matches.textContent = '검색 중';
+      try {
+        const { places } = await requestMobility('search', { query: searched });
+        if (query.value !== searched || !row.isConnected) return;
+        matches.replaceChildren();
+        if (!places.length) matches.textContent = '검색 결과가 없어요.';
+        places.forEach((place) => {
+          const choice = document.createElement('button');
+          choice.type = 'button';
+          choice.textContent = `${place.name} · ${place.address}`;
+          choice.addEventListener('click', () => select(place));
+          matches.append(choice);
+        });
+      } catch (error) { if (query.value === searched) matches.textContent = error.message; }
+      finally { button.disabled = busy; }
+    });
+    row.querySelector('[data-remove]').addEventListener('click', () => {
+      if (container.children.length <= (type === 'participant' ? 2 : 1)) return;
+      row.remove(); invalidate(); limits();
+    });
+    if (seed) select(seed);
+    limits();
+  };
+  const readRows = (container) => [...container.children].map((row) => {
+    const latitude = row.querySelector('[data-lat]').value;
+    const longitude = row.querySelector('[data-lng]').value;
+    const name = (row.querySelector('[data-name]') || row.querySelector('[data-query]')).value.trim();
+    if (!name || !row.querySelector('[data-query]').value.trim() || latitude === '' || longitude === '') throw new Error('이름과 장소를 입력하고 검색 결과를 선택하거나 좌표를 입력해 주세요.');
+    return { name, place: { lat: Number(latitude), lng: Number(longitude) } };
+  });
+  const setBusy = (value) => { busy = value; form.querySelectorAll('input, select, button').forEach((control) => { control.disabled = value; }); limits(); form.setAttribute('aria-busy', String(value)); };
+  form.addEventListener('input', invalidate);
+  form.addEventListener('change', invalidate);
+  form.querySelectorAll('[data-add]').forEach((button) => button.addEventListener('click', () => { addRow(button.dataset.add); invalidate(); }));
+  form.querySelector('#midpoint-nearby').addEventListener('click', async () => {
+    try {
+      const origins = readRows(participants);
+      setBusy(true); invalidate(); status.textContent = '주변 후보를 찾고 있어요.';
+      const { places } = await requestMobility('nearby', { participants: origins, category: form.elements.category.value });
+      if (!places.length) throw new Error('주변 후보가 없어요. 다른 종류나 직접 입력한 장소를 선택해 주세요.');
+      candidates.replaceChildren(); places.forEach((place) => addRow('candidate', place));
+      status.textContent = `${places.length}곳을 찾았어요.`;
+    } catch (error) { status.textContent = error.message; }
+    finally { setBusy(false); }
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    try {
+      const body = { mode: form.elements.mode.value, participants: readRows(participants), candidates: readRows(candidates) };
+      invalidate(); setBusy(true); status.textContent = '이동 시간을 비교하고 있어요.';
+      const response = await requestMobility('midpoint', body);
+      compared = response.candidates;
+      status.textContent = `${response.estimated ? '추정 경로가 포함되어 있어요. 실제 시간과 다를 수 있어요. ' : ''}조회 ${new Date(response.comparedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;
+      results.innerHTML = compared.map((candidate, index) => `<article class="midpoint-result"><header><h2>${index + 1}. ${escapeHtml(candidate.name)}</h2><span class="tag ${candidate.estimated ? 'amber' : 'green'}">${candidate.estimated ? '추정 포함' : '경로 조회'}</span></header><dl><div><dt>평균</dt><dd>${candidate.averageMinutes}분</dd></div><div><dt>최대</dt><dd>${candidate.maximumMinutes}분</dd></div><div><dt>차이</dt><dd>${candidate.spreadMinutes}분</dd></div></dl><ul>${candidate.travels.map((travel) => `<li><span>${escapeHtml(travel.name)}</span><b>${travel.travelMinutes}분</b><small>${travel.method === 'estimate' ? '직선거리 추정' : escapeHtml(travel.detail)}${travel.walkingMinutes ? ` · 도보 ${travel.walkingMinutes}분` : ''}${travel.transferCount ? ` · 환승 ${travel.transferCount}회` : ''}</small></li>`).join('')}</ul><footer><a href="https://map.kakao.com/link/map/${encodeURIComponent(candidate.name)},${candidate.place.lat},${candidate.place.lng}" target="_blank" rel="noopener noreferrer"><span class="material-symbols-rounded">map</span>지도</a><button type="button" data-use="${index}"><span class="material-symbols-rounded">event_available</span>이 장소로 일정 만들기</button></footer></article>`).join('');
+    } catch (error) { status.textContent = error.message; }
+    finally { setBusy(false); }
+  });
+  results.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-use]');
+    const candidate = button && compared[Number(button.dataset.use)];
+    if (candidate) openEventFormModal('create', { title: '약속', location: candidate.name, place: { ...candidate.place, name: candidate.name } });
+  });
+  addRow('participant'); addRow('participant'); addRow('candidate');
+}
 
 function initializeKakaoMap() {
   const key = document.querySelector('meta[name="kakao-javascript-key"]')?.content.trim();
@@ -545,7 +660,8 @@ document.querySelector('.brand')?.addEventListener('click', (event) => {
 
 document.querySelector('[aria-label="알림"]')?.addEventListener('click', () => {
   const familyNotifications = window.MapDuleFamily?.notificationsHtml() || '';
-  showModal('알림 센터', familyNotifications || '<p>새로운 알림이 없습니다.</p><p class="modal-note">가족이 출발하거나 도착하면 이곳에 표시됩니다.</p>', '닫기');
+  showModal('알림 센터', `${familyNotifications || '<p>새로운 알림이 없습니다.</p>'}<button class="link-button" id="stop-all-departure-reminders" type="button"><span class="material-symbols-rounded">notifications_off</span>이 기기의 출발 알림 끄기</button><p id="stop-reminders-status" role="status"></p>`, '닫기');
+  document.querySelector('#stop-all-departure-reminders')?.addEventListener('click', () => disableDepartureReminders(document.querySelector('#stop-reminders-status')));
 });
 
 function openProfileEditor() {
@@ -921,7 +1037,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   const formatTime = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   const initialStartTime = isEditing ? existingEvent.startTime || '09:00' : formatTime(defaultStartMinutes);
   const initialEndTime = isEditing ? existingEvent.endTime || '10:00' : formatTime(Math.min(defaultStartMinutes + 60, 23 * 60 + 59));
-  let selectedPlace = isEditing && existingEvent.place ? { ...existingEvent.place } : null;
+  let selectedPlace = existingEvent?.place ? { ...existingEvent.place } : null;
   const selectableCalendars = calendarGroups.filter((group) => group.id !== 'family' || familyJoined || selectedCalendar === 'family');
   const participantIds = new Set(isEditing && existingEvent.participants ? existingEvent.participants : [family?.me()].filter(Boolean));
   const participantOptions = familyJoined
@@ -936,7 +1052,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
         <button type="button" class="event-modal-close" aria-label="닫기"><span class="material-symbols-rounded">close</span></button>
       </header>
       <form class="event-modal-form">
-        <label class="event-form-field event-title-field"><span>제목</span><input name="title" type="text" maxlength="80" placeholder="일정 제목을 입력하세요" value="${escapeHtml(isEditing ? existingEvent.title : '')}" required autofocus></label>
+        <label class="event-form-field event-title-field"><span>제목</span><input name="title" type="text" maxlength="80" placeholder="일정 제목을 입력하세요" value="${escapeHtml(existingEvent?.title || '')}" required autofocus></label>
         <div class="event-form-field event-date-field"><label for="event-date-input"><span>날짜</span></label><input id="event-date-input" name="date" type="date" value="${escapeHtml(isEditing ? existingEvent.date : initialDate)}" required><span class="event-date-shortcuts"><button type="button" data-event-date="${todayDate}">오늘</button><button type="button" data-event-date="${tomorrowDate}">내일</button></span></div>
         <label class="event-all-day-field"><input name="allDay" type="checkbox" ${isEditing && existingEvent.allDay ? 'checked' : ''}><span class="event-checkmark"></span><span>종일</span></label>
         <div class="event-time-fields">
@@ -951,7 +1067,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
         <fieldset class="event-repeat-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>매주 반복</legend><div class="repeat-days">${['일', '월', '화', '수', '목', '금', '토'].map((label, day) => `<label><input type="checkbox" name="repeatDays" value="${day}" ${isEditing && existingEvent.repeatDays?.includes(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><label class="repeat-until">반복 종료일<input name="repeatUntil" type="date" value="${escapeHtml(isEditing ? existingEvent.repeatUntil || '' : '')}"></label></fieldset>
         <label class="event-return-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><input type="checkbox" name="returnHome" ${(isEditing ? existingEvent.returnHome : true) ? 'checked' : ''}><span>끝나면 집으로 귀가 알림</span></label>
         ${isEditing && existingEvent.seriesId ? '<fieldset class="event-scope-field"><legend>수정 범위</legend><label><input type="radio" name="scope" value="one" checked>이 날만</label><label><input type="radio" name="scope" value="series">이 날부터 이후 모두</label></fieldset>' : ''}` : ''}
-        <div class="event-form-field event-location-field"><label for="event-location-input"><span>장소 <small>선택</small></span></label><div class="event-location-input-row"><input id="event-location-input" name="location" type="text" maxlength="120" placeholder="장소명이나 도로명 주소" value="${escapeHtml(isEditing ? existingEvent.location || '' : '')}"><button class="event-location-search" type="button" aria-label="장소 검색" title="지도에서 장소 검색"><span class="material-symbols-rounded">search</span></button></div><p class="event-location-status" aria-live="polite">${selectedPlace ? `선택한 위치 · ${escapeHtml(selectedPlace.name)}${selectedPlace.address ? ` · ${escapeHtml(selectedPlace.address)}` : ''}` : '검색 결과를 확인해 정확한 장소를 선택하세요.'}</p><div class="event-place-results" hidden></div></div>
+        <div class="event-form-field event-location-field"><label for="event-location-input"><span>장소 <small>선택</small></span></label><div class="event-location-input-row"><input id="event-location-input" name="location" type="text" maxlength="120" placeholder="장소명이나 도로명 주소" value="${escapeHtml(existingEvent?.location || '')}"><button class="event-location-search" type="button" aria-label="장소 검색" title="지도에서 장소 검색"><span class="material-symbols-rounded">search</span></button></div><p class="event-location-status" aria-live="polite">${selectedPlace ? `선택한 위치 · ${escapeHtml(selectedPlace.name)}${selectedPlace.address ? ` · ${escapeHtml(selectedPlace.address)}` : ''}` : '검색 결과를 확인해 정확한 장소를 선택하세요.'}</p><div class="event-place-results" hidden></div></div>
         <label class="event-form-field"><span>설명</span><textarea name="notes" rows="3" maxlength="300" placeholder="메모를 남겨 보세요">${escapeHtml(isEditing ? existingEvent.notes || existingEvent.description || '' : '')}</textarea></label>
         <footer class="event-modal-footer">
           ${isEditing ? '<button class="event-delete-button" type="button"><span class="material-symbols-rounded">delete</span>삭제</button>' : '<span></span>'}
@@ -1608,6 +1724,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
   }
 
   function renderCalendar() {
+    void window.MapDulePush?.reconcile(allEvents());
     const timeline = document.querySelector('.timeline');
     if (!timeline) return;
     const date = localDateString(selectedDate);
@@ -1695,8 +1812,13 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
         const gapLabel = item.gapMinutes < 0 ? `일정이 ${Math.abs(item.gapMinutes)}분 겹쳐요` : `일정 사이 ${item.gapMinutes}분`;
         const travelLabel = item.travelMinutes === null
           ? '위치가 없어 이동 시간은 계산하지 않았어요. 일정 장소를 검색해 선택해 주세요.'
-          : `이동 ${item.travelMinutes}분 ${item.routeSource === 'kakao-mobility' ? '실시간 경로' : '추정'} · ${item.bufferMinutes < 0 ? `약 ${Math.abs(item.bufferMinutes)}분 부족` : `이동 후 ${item.bufferMinutes}분 여유`}${item.recommendedDepartureTime ? ` · 권장 출발 ${item.recommendedDepartureTime}` : ''}`;
-        return `<article class="ai-plan-transition ${escapeHtml(item.status)}"><header><b>${escapeHtml(item.fromTitle)} → ${escapeHtml(item.toTitle)}</b><span>${escapeHtml(statusLabels[item.status] || '확인 필요')}</span></header><p>${gapLabel} · ${travelLabel}</p><small>${distanceLabel(item.straightLineDistanceMeters)} · ${escapeHtml(item.reason)}</small></article>`;
+          : `이동 ${item.travelMinutes}분 ${escapeHtml(({ 'kakao-mobility': '카카오 자동차 경로', 'odsay-walk': 'ODsay 도보 경로', 'odsay-transit': 'ODsay 대중교통 경로' })[item.routeSource] || '추정')} · ${item.bufferMinutes < 0 ? `약 ${Math.abs(item.bufferMinutes)}분 부족` : `이동 후 ${item.bufferMinutes}분 여유`}${item.recommendedDepartureTime ? ` · 권장 출발 ${escapeHtml(item.recommendedDepartureTime)}` : ''}`;
+        const details = [distanceLabel(item.straightLineDistanceMeters), item.reason];
+        if (Number.isFinite(item.walkingMinutes)) details.push(`도보 ${item.walkingMinutes}분`);
+        if (Number.isFinite(item.transferCount)) details.push(`환승 ${item.transferCount}회`);
+        if (item.dataUpdatedAt && Number.isFinite(Date.parse(item.dataUpdatedAt))) details.push(`조회 ${new Date(item.dataUpdatedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`);
+        if (item.fallbackReason) details.push(item.fallbackReason === 'not-configured' ? '경로 API 미설정' : '경로 조회 실패·미지원 구간');
+        return `<article class="ai-plan-transition ${escapeHtml(item.status)}"><header><b>${escapeHtml(item.fromTitle)} → ${escapeHtml(item.toTitle)}</b><span>${escapeHtml(statusLabels[item.status] || '확인 필요')}</span></header><p>${gapLabel} · ${travelLabel}</p><small>${details.map((detail) => escapeHtml(detail)).join(' · ')}</small></article>`;
       }).join('');
       const reminderTargets = upcomingDepartures(date, transitions);
       panel.innerHTML = `
@@ -1705,12 +1827,16 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
         ${result.aiNotice ? `<p class="ai-plan-assumptions">${escapeHtml(result.aiNotice)}</p>` : ''}
         ${transitions.length ? `<div class="ai-plan-transitions">${transitionMarkup}</div>` : '<p class="ai-plan-empty">시간이 정해진 일정이 2개 이상 있어야 일정 간 이동 여유를 계산할 수 있어요.</p>'}
         ${recommendations.length ? `<section class="ai-plan-recommendations"><h3>추천</h3><ul>${recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></section>` : ''}
-        ${reminderTargets.length ? '<section class="ai-plan-recommendations"><h3>출발 알림</h3><button class="link-button" id="enable-departure-reminders" type="button"><span class="material-symbols-rounded">notifications_active</span>출발 시각에 알려 주세요</button><p class="ai-plan-assumptions" id="departure-reminder-status" role="status" aria-live="polite">알림은 이 탭이 열려 있는 동안 동작해요.</p></section>' : ''}
+        ${reminderTargets.length ? '<section class="ai-plan-recommendations"><h3>출발 알림</h3><button class="link-button" id="enable-departure-reminders" type="button"><span class="material-symbols-rounded">notifications_active</span>출발 시각에 알려 주세요</button><button class="link-button" id="disable-departure-reminders" type="button"><span class="material-symbols-rounded">notifications_off</span>알림 끄기</button><p class="ai-plan-assumptions" id="departure-reminder-status" role="status" aria-live="polite">알림 방식은 브라우저 권한과 서버 설정에 따라 달라집니다.</p></section>' : ''}
         ${assumptions.length ? `<p class="ai-plan-assumptions">${assumptions.map((item) => escapeHtml(item)).join(' · ')}</p>` : ''}
       `;
-      panel.querySelector('#enable-departure-reminders')?.addEventListener('click', () => {
-        enableDepartureReminders(date, transitions, panel.querySelector('#departure-reminder-status'));
+      panel.querySelector('#enable-departure-reminders')?.addEventListener('click', async (event) => {
+        const control = event.currentTarget;
+        control.disabled = true;
+        try { await enableDepartureReminders(date, transitions, panel.querySelector('#departure-reminder-status')); }
+        finally { control.disabled = false; }
       });
+      panel.querySelector('#disable-departure-reminders')?.addEventListener('click', () => disableDepartureReminders(panel.querySelector('#departure-reminder-status')));
     } catch (error) {
       panel.innerHTML = `<div class="ai-plan-error"><b>일정을 계산하지 못했어요.</b><p>${escapeHtml(error.message || '서버 연결 상태를 확인해 주세요.')}</p><button class="link-button" id="retry-day-plan" type="button"><span class="material-symbols-rounded">refresh</span>다시 계산</button></div>`;
       panel.querySelector('#retry-day-plan')?.addEventListener('click', () => document.querySelector('#analyze-day-plan')?.click());
@@ -1744,6 +1870,21 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
   const DEPARTURE_REMINDER_KEY = 'mapdule-departure-reminders';
 
+  function departureEventFingerprint(event) {
+    return event ? JSON.stringify([event.date, event.startTime, event.endTime, event.title, event.location,
+      event.place?.lat, event.place?.lng, event.allDay, event.participants]) : null;
+  }
+
+  async function disableDepartureReminders(statusElement) {
+    try {
+      localStorage.removeItem(DEPARTURE_REMINDER_KEY);
+      await window.MapDulePush?.cancel();
+      statusElement.textContent = '이 기기의 출발 알림을 껐어요.';
+    } catch {
+      statusElement.textContent = '탭 알림은 껐지만 서버 예약 취소에 실패했어요. 연결을 확인한 뒤 다시 눌러 주세요.';
+    }
+  }
+
   function clockToMinutes(value) {
     const [hours, minutes] = String(value).split(':').map(Number);
     return hours * 60 + minutes;
@@ -1761,11 +1902,17 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
   function checkDepartureReminders() {
     const stored = readStoredValue(DEPARTURE_REMINDER_KEY, null);
-    if (!stored || stored.date !== localDateString(new Date()) || !Array.isArray(stored.items)) return;
+    if (!stored || stored.date !== localDateString(new Date()) || !Array.isArray(stored.items) || stored.background) return;
+    const events = allEvents();
     const now = new Date();
     const minutes = now.getHours() * 60 + now.getMinutes();
     let changed = false;
     for (const item of stored.items) {
+      if (item.fingerprints?.some(([id, previous]) => previous !== departureEventFingerprint(events.find((event) => event.id === id)))) {
+        item.departed = item.lateWarned = true;
+        changed = true;
+        continue;
+      }
       const start = clockToMinutes(item.startTime);
       const latestDeparture = start - item.travelMinutes;
       if (minutes >= start) {
@@ -1800,8 +1947,8 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
       statusElement.textContent = '아직 지나지 않은 출발 시각이 없어요.';
       return;
     }
-    try {
-      localStorage.setItem(DEPARTURE_REMINDER_KEY, JSON.stringify({
+    const events = allEvents();
+    const reminder = {
         date,
         items: targets.map((item) => ({
           id: item.toId,
@@ -1809,10 +1956,13 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
           startTime: item.nextStartTime,
           departAt: item.recommendedDepartureTime,
           travelMinutes: item.travelMinutes,
+          fingerprints: [item.fromId, item.toId].map((id) => [id, departureEventFingerprint(events.find((event) => event.id === id))]),
           departed: false,
           lateWarned: false
         }))
-      }));
+    };
+    try {
+      localStorage.setItem(DEPARTURE_REMINDER_KEY, JSON.stringify(reminder));
     } catch {
       statusElement.textContent = '브라우저 저장 공간 문제로 출발 알림을 켜지 못했어요.';
       return;
@@ -1825,6 +1975,21 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
       }
     }
     const count = `출발 알림 ${targets.length}개를 켰어요.`;
+    if (permission === 'granted' && window.MapDulePush) {
+      statusElement.textContent = '닫힌 앱 알림을 연결하고 있어요.';
+      try {
+        if (await window.MapDulePush.schedule(date, targets, events)) {
+          reminder.background = true;
+          localStorage.setItem(DEPARTURE_REMINDER_KEY, JSON.stringify(reminder));
+          statusElement.textContent = `${count} 서버에 푸시를 예약했어요. 네트워크·기기 절전 상태에 따라 늦거나 누락될 수 있어요.`;
+          return;
+        }
+      } catch (error) {
+        statusElement.textContent = `${count} 푸시 연결 실패: ${error.message || '서버 연결을 확인해 주세요.'} 이 탭이 열린 동안만 알려 드려요.`;
+        checkDepartureReminders();
+        return;
+      }
+    }
     statusElement.textContent = permission === 'granted'
       ? `${count} 이 탭이 열려 있는 동안 출발 시각에 알려 드려요. 탭을 닫으면 알림이 오지 않아요.`
       : `${count} 브라우저 알림이 꺼져 있어 앱 화면이 열려 있을 때만 알려 드려요. 알림을 받으려면 주소창의 사이트 정보에서 알림을 허용해 주세요.`;
@@ -1833,7 +1998,16 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
 
   setInterval(checkDepartureReminders, 30000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') checkDepartureReminders();
+    if (document.visibilityState === 'visible') {
+      checkDepartureReminders();
+      void window.MapDulePush?.reconcile(allEvents());
+    }
+  });
+  window.addEventListener('storage', (event) => {
+    if (event.key === EVENTS_STORAGE_KEY) {
+      checkDepartureReminders();
+      void window.MapDulePush?.reconcile(allEvents());
+    }
   });
 
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
@@ -2204,6 +2378,13 @@ document.querySelector('#ai .primary-cta')?.addEventListener('click', () => {
 });
 
 document.querySelector('.manual-link')?.addEventListener('click', () => showView('today'));
+
+function openLinkedView() {
+  const id = location.hash.slice(1);
+  if (views.some((view) => view.id === id)) showView(id);
+}
+openLinkedView();
+window.addEventListener('hashchange', openLinkedView);
 
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;

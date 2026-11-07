@@ -9,6 +9,11 @@ The latest user request is to deploy the current application update on 2026-11-0
 Update the existing application only. Preserve the existing design, family chat, Korean UI and server reliability fixes.
 Do not create, delete or reconfigure Azure infrastructure or expose application secrets.
 
+Current request (2026-11-07): commit and push the implemented route, midpoint and
+departure-push update to main, then verify the existing deployment pipeline.
+Keep all current Azure resources and secrets unchanged. Real route keys and the
+external push scheduler remain operator configuration, not part of this redeploy.
+
 ## 2. Existing deployment
 
 - Repository: baekjungi/MapDule, branch main.
@@ -50,6 +55,11 @@ Do not switch to azd, create an environment or generate replacement infrastructu
   - [x] Browser workflow, route estimation and family regression tests
   - [x] Existing pipeline and deployment token configuration
   - [x] Static role verification: guest routes enabled; API secrets remain server-side; no Azure RBAC changes
+  - [x] API lockfile installation: npm ci --prefix api --ignore-scripts
+
+Current update: Kakao/ODsay route adapters and fallback metadata; midpoint place
+search and travel comparison; optional departure Web Push API and service worker;
+mobile entry controls; focused regression tests and configuration documentation.
 
 ## 6. Deployment and verification
 
@@ -95,3 +105,23 @@ Validated at 2026-11-05T22:15:32+09:00 through the azure-validate workflow.
 - Follow-up commit `36d212c` completes frontend/server integration and preserves these workflow fixes.
 - No Azure provisioning, SKU, subscription, region, RBAC or secret-value changes are requested.
 - CI will repeat syntax, tests and build against the exact pushed commit before deployment.
+
+### 2026-11-07 route, midpoint and departure-push redeployment
+
+Validation recorded at 2026-11-07T23:39:54+09:00 through azure-validate.
+
+- `npm ci --prefix api --ignore-scripts`: passed; 21 packages audited, zero vulnerabilities.
+- `npm run check`: passed for all application and API modules, including the new functions.
+- `npm test`: 112 tests passed, zero failures.
+- `npm run build`: passed; ten public browser assets, including push script, worker, manifest and icon.
+- `git diff --check`: passed; the key example contains placeholders or empty values only.
+- The installed Web Push package loads and exports `sendNotification` in the Node runtime.
+- GitHub authentication works and the existing app-specific deployment secret is present.
+- Local main and fetched origin/main match before committing; use a normal commit and push, never force-push.
+- Existing pipeline validates on Node 22 before deployment; CI verifies the exact pushed commit.
+- Local browser confirmed midpoint ranking, selected-place modal prefill, unconfigured push fallback,
+  and layouts without horizontal overflow at 360, 390 and 1280 CSS-pixel viewport widths.
+- Existing Azure resources, app roles, RBAC and secret values are unchanged. Deployment uses the
+  existing GitHub Actions token for the same Static Web App; no provisioning commands are needed.
+- Actual external-route calls and closed-app push delivery require operator configuration and
+  were not validated here. Monitor the pipeline, then verify production assets and the new APIs.

@@ -9,7 +9,16 @@ test('build output contains only browser assets', () => {
   execFileSync(process.execPath, ['scripts/stage-static.js'], { cwd: projectRoot });
 
   const outputFiles = fs.readdirSync(path.join(projectRoot, 'dist')).sort();
-  assert.deepEqual(outputFiles, ['app.js', 'family.css', 'family.js', 'index.html', 'staticwebapp.config.json', 'styles.css']);
+  assert.deepEqual(outputFiles, ['app-icon.svg', 'app.js', 'departure-push.js', 'family.css', 'family.js', 'index.html', 'manifest.webmanifest', 'staticwebapp.config.json', 'styles.css', 'sw.js']);
+});
+
+test('midpoint has an accessible entry and new styles preserve the font import', () => {
+  const root = path.resolve(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+  assert.match(html, /data-view="midpoint" aria-label="약속 지점 찾기" title="약속 지점 찾기"/);
+  assert.match(styles, /^@import url\(/);
+  assert.match(styles, /\.app-shell \.topbar:has\(\[data-view="midpoint"\]\)\{[^}]*flex-wrap:wrap/);
 });
 
 test('keeps the family refresh control accessible at narrow mobile widths', () => {

@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#f7f8ff">
   <meta name="kakao-javascript-key" content="79ac7301b60d4e5219139db6ff8dd72a">
   <title>MapDule | 하루 동선 플래너</title>
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -25,6 +26,7 @@
         <button class="family-header-button" type="button" data-view="family" aria-label="가족" title="가족"><span class="material-symbols-rounded">family_restroom</span><span>가족</span></button>
         <button class="ai-register-button" type="button" data-view="ai" aria-label="AI 일정 등록" title="AI 일정 등록"><span class="material-symbols-rounded">auto_awesome</span><span>AI 일정 등록</span></button>
         <span class="status-pill"><i></i>서초동</span>
+        <button class="icon-button" type="button" data-view="midpoint" aria-label="약속 지점 찾기" title="약속 지점 찾기"><span class="material-symbols-rounded">hub</span></button>
         <button class="icon-button" aria-label="알림"><span class="material-symbols-rounded">notifications</span></button>
         <button class="avatar" aria-label="프로필">김</button>
       </div>
@@ -98,5 +100,6 @@
   </main>
   <script src="app.js"></script>
   <script src="family.js"></script>
+  <script src="departure-push.js"></script>
 </body>
 </html>

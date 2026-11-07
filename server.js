@@ -4,12 +4,15 @@ const path = require('node:path');
 const { getAiStatus, parseSchedulePrompt, analyzeSchedulePlan } = require('./api/src/ai-schedule');
 const { handleFamilyRequest } = require('./api/src/family-runtime');
 const { runAiRequest } = require('./api/src/ai-access');
+const { handleMobilityRequest } = require('./api/src/mobility');
+const { handleDeparturePushRequest, dispatchLocalDepartures } = require('./api/src/departure-push');
 
 const root = __dirname;
 const envFile = path.join(root, '.env');
 const MAX_REQUEST_BYTES = 16 * 1024;
 const localFamilyDataFile = path.join(root, '.mapdule-data', 'family-dev.json');
-const publicFiles = new Set(['index.html', 'app.js', 'styles.css', 'family.js', 'family.css']);
+const publicFiles = new Set(['index.html', 'app.js', 'styles.css', 'family.js', 'family.css', 'departure-push.js', 'sw.js', 'manifest.webmanifest', 'app-icon.svg']);
+const localPushOptions = { localFilePath: path.join(root, '.mapdule-data', 'push-dev.json') };
 const securityHeaders = {
   'Content-Security-Policy': "upgrade-insecure-requests; default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net https://t1.kakaocdn.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.kakao.com https://*.daumcdn.net",
   'Permissions-Policy': 'geolocation=(self), camera=(), microphone=()',
@@ -42,6 +45,7 @@ const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon'
 };
@@ -203,6 +207,44 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   const familyMatch = requestUrl.pathname.match(/^\/api\/family\/([a-z-]+)$/);
+  const pushMatch = requestUrl.pathname.match(/^\/api\/push\/(status|schedule|cancel|dispatch)$/);
+  if (pushMatch && request.method === (pushMatch[1] === 'status' ? 'GET' : 'POST')) {
+    let body = {};
+    if (request.method === 'POST') {
+      if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
+        sendJson(response, 415, { error: '요청 Content-Type은 application/json이어야 합니다.' });
+        return;
+      }
+      try {
+        body = await readJsonBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('요청 본문은 JSON 객체여야 합니다.'), { statusCode: 400 });
+      } catch (error) {
+        sendJson(response, error.statusCode || 400, { error: error.message });
+        return;
+      }
+    }
+    const token = (request.headers.authorization || '').replace(/^Bearer /, '');
+    const result = await handleDeparturePushRequest(pushMatch[1], body, token, request.socket.remoteAddress, localPushOptions);
+    sendJson(response, result.status, result.body, result.retryAfter);
+    return;
+  }
+  const mobilityMatch = requestUrl.pathname.match(/^\/api\/mobility\/(status|search|nearby|midpoint)$/);
+  if (mobilityMatch && request.method === (mobilityMatch[1] === 'status' ? 'GET' : 'POST')) {
+    let body = {};
+    if (request.method === 'POST') {
+      if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
+        sendJson(response, 415, { error: '요청 Content-Type은 application/json이어야 합니다.' });
+        return;
+      }
+      try { body = await readJsonBody(request); } catch (error) {
+        sendJson(response, error.statusCode || 400, { error: error.message });
+        return;
+      }
+    }
+    const result = await handleMobilityRequest(mobilityMatch[1], body, request.socket.remoteAddress);
+    sendJson(response, result.status, result.body, result.retryAfter);
+    return;
+  }
   if (familyMatch && ['GET', 'POST'].includes(request.method)) {
     await familyRoute(request, response, familyMatch[1], requestUrl);
     return;
@@ -240,15 +282,27 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(200, {
       ...securityHeaders,
       'Content-Type': mimeTypes[extension] || 'application/octet-stream',
-      'Cache-Control': process.env.NODE_ENV === 'production' ? 'public, max-age=3600' : 'no-cache'
+      'Cache-Control': path.basename(filePath) === 'sw.js' ? 'no-cache' : process.env.NODE_ENV === 'production' ? 'public, max-age=3600' : 'no-cache'
     });
     response.end(request.method === 'HEAD' ? undefined : content);
   });
 });
 
 if (require.main === module) {
+  let dispatching = false;
+  const dispatch = async () => {
+    if (dispatching) return;
+    dispatching = true;
+    try { await dispatchLocalDepartures(localPushOptions); }
+    catch { console.error('Departure push dispatch failed.'); }
+    finally { dispatching = false; }
+  };
+  const pushTimer = setInterval(dispatch, 30000);
+  pushTimer.unref();
+  server.on('close', () => clearInterval(pushTimer));
   server.listen(port, '127.0.0.1', () => {
     console.log(`MapDule is running at http://localhost:${port}`);
+    void dispatch();
   });
 }
 
