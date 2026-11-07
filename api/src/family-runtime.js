@@ -1,5 +1,6 @@
 const { createFamilyService, FamilyError } = require('./family-service');
 const { createTableStore, createFileStore } = require('./family-store');
+const { createWebPushNotifier } = require('./departure-push');
 
 // 요청 처리기를 한 번만 만들어 재사용한다.
 // - 배포(Azure Functions): MAPDULE_STORAGE_CONNECTION_STRING 이 있으면 Azure Table Storage 사용
@@ -13,9 +14,9 @@ function connectionString() {
 function getFamilyService({ localFilePath } = {}) {
   if (cachedService) return cachedService;
   if (connectionString()) {
-    cachedService = createFamilyService({ store: createTableStore(connectionString()) });
+    cachedService = createFamilyService({ store: createTableStore(connectionString()), notifier: createWebPushNotifier() });
   } else if (localFilePath) {
-    cachedService = createFamilyService({ store: createFileStore(localFilePath) });
+    cachedService = createFamilyService({ store: createFileStore(localFilePath), notifier: createWebPushNotifier() });
   }
   return cachedService;
 }
@@ -49,4 +50,4 @@ async function handleFamilyRequest(request, options) {
   }
 }
 
-module.exports = { handleFamilyRequest, getFamilyStatus };
+module.exports = { handleFamilyRequest, getFamilyStatus, getFamilyService };

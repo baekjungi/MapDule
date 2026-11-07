@@ -118,6 +118,27 @@ function pushConfiguration({ localFilePath } = {}) {
     && (storage || localFilePath) && (localFilePath || process.env.MAPDULE_PUSH_DISPATCH_KEY?.length >= 32));
   return { enabled, publicKey: enabled ? publicKey : null, storage, privateKey, subject };
 }
+// 가족 알림이 함께 쓰는 Web Push 발송기. VAPID 설정이나 web-push가 없으면 null.
+function createWebPushNotifier() {
+  const publicKey = process.env.MAPDULE_VAPID_PUBLIC_KEY || '';
+  const privateKey = process.env.MAPDULE_VAPID_PRIVATE_KEY || '';
+  const subject = process.env.MAPDULE_VAPID_SUBJECT || '';
+  if (!(/^[A-Za-z0-9_-]+$/.test(publicKey) && Buffer.from(publicKey, 'base64url').length === 65
+    && /^[A-Za-z0-9_-]+$/.test(privateKey) && Buffer.from(privateKey, 'base64url').length === 32
+    && /^(mailto:[^\s@]+@[^\s]+|https:\/\/[^\s]+)$/.test(subject))) return null;
+  let webPush;
+  try { webPush = require('web-push'); } catch { return null; }
+  return (subscription, payload) => webPush.sendNotification(subscription, JSON.stringify(payload), {
+    TTL: 600, urgency: 'high', timeout: 4000, vapidDetails: { subject, publicKey, privateKey }
+  });
+}
+
+async function dispatchFamilyAlarms(options = {}) {
+  const { getFamilyService } = require('./family-runtime');
+  const service = getFamilyService({ localFilePath: options.familyLocalFilePath });
+  return service ? service.dispatchAlarms() : { families: 0, sent: 0 };
+}
+
 function getService(options) {
   if (cachedService) return cachedService;
   const config = pushConfiguration(options);
@@ -141,7 +162,10 @@ async function handleDeparturePushRequest(action, body, token, clientKey, option
       const key = process.env.MAPDULE_PUSH_DISPATCH_KEY;
       if (!key || key.length < 32 || typeof token !== 'string' || Buffer.byteLength(token) !== Buffer.byteLength(key)
         || !crypto.timingSafeEqual(Buffer.from(token), Buffer.from(key))) fail(401, '예약 실행 인증이 필요합니다.');
-      return { status: 200, body: await getService(options).dispatch() };
+      const departures = await getService(options).dispatch();
+      let family = { families: 0, sent: 0 };
+      try { family = await dispatchFamilyAlarms(options); } catch { family.error = true; }
+      return { status: 200, body: { ...departures, family } };
     }
     if (!['schedule', 'cancel'].includes(action)) fail(404, '알림 API를 찾을 수 없습니다.');
     return { status: 200, body: await runLimited(clientKey, () => getService(options)[action](body, token)) };
@@ -152,7 +176,10 @@ async function handleDeparturePushRequest(action, body, token, clientKey, option
   }
 }
 async function dispatchLocalDepartures(options) {
-  if (pushConfiguration(options).enabled) await getService(options).dispatch();
+  if (pushConfiguration(options).enabled) {
+    await getService(options).dispatch();
+    await dispatchFamilyAlarms(options);
+  }
 }
 
-module.exports = { createDeparturePushService, validateSubscription, handleDeparturePushRequest, dispatchLocalDepartures };
+module.exports = { createDeparturePushService, validateSubscription, handleDeparturePushRequest, dispatchLocalDepartures, createWebPushNotifier };

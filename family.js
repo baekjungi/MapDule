@@ -326,6 +326,10 @@
   const COMPLETED_KEY = 'mapdule-family-completed';
   const GEOCODE_CACHE_KEY = 'mapdule-geocode-cache';
   const DEPART_ALARM_KEY = 'mapdule-depart-alarm';
+  const FAMILY_PUSH_KEY = 'mapdule-family-push';
+  let pushConfig = null;
+  let pushBusy = false;
+  let pushSynced = false;
   const HOME_PLACE_KEY = 'mapdule-home-place';
   const POLL_INTERVAL_MS = 60000;
   const POLL_ACTIVE_MS = 15000;
@@ -529,6 +533,8 @@
     writeJson(ACTIVITY_KEY, null);
     writeJson(COMPLETED_KEY, null);
     writeJson(DEPART_ALARM_KEY, null);
+    writeJson(FAMILY_PUSH_KEY, null);
+    pushSynced = false;
     document.querySelector('.depart-alarm-backdrop')?.remove();
     alarmOpen = false;
     if (callServer && previous) {
@@ -666,6 +672,7 @@
         syncTrackingWithServer();
         checkCompletions();
         afterStateChange(eventsChanged);
+        syncFamilyPush();
         return state;
       } catch (error) {
         if (!quiet) showToast(error.message, 'info');
@@ -1353,6 +1360,118 @@
     </section>`;
   }
 
+  // ---------- 앱을 닫아도 오는 가족 알림 ----------
+
+  function pushSupported() {
+    return window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  }
+
+  function isStandalone() {
+    return window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+  }
+
+  function needsHomeScreen() {
+    return /iPhone|iPad|iPod/.test(navigator.userAgent) && !isStandalone();
+  }
+
+  async function loadPushConfig() {
+    if (pushConfig) return pushConfig;
+    try {
+      const response = await fetch('/api/push/status', { signal: AbortSignal.timeout(8000) });
+      pushConfig = response.ok ? await response.json() : { enabled: false };
+    } catch {
+      return { enabled: false };
+    }
+    return pushConfig;
+  }
+
+  function vapidBytes(key) {
+    const base64 = key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4);
+    return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+  }
+
+  async function currentSubscription(config, create) {
+    const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+    await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription && create) {
+      subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidBytes(config.publicKey) });
+    }
+    return subscription;
+  }
+
+  async function enableFamilyPush() {
+    if (pushBusy) return;
+    pushBusy = true;
+    renderFamilyView();
+    try {
+      const config = await loadPushConfig();
+      if (!config.enabled) throw new Error('알림 서버가 아직 준비되지 않았어요.');
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('알림을 허용해야 받을 수 있어요. 브라우저 설정에서 알림을 허용해 주세요.');
+      const subscription = await currentSubscription(config, true);
+      await api('push-subscribe', { body: { subscription: subscription.toJSON() } });
+      writeJson(FAMILY_PUSH_KEY, { endpoint: subscription.endpoint });
+      pushSynced = true;
+      showToast('앱을 닫아도 가족 알림을 받아요.');
+    } catch (error) {
+      showToast(error.message || '알림을 켜지 못했어요.', 'info');
+    } finally {
+      pushBusy = false;
+      renderFamilyView();
+    }
+  }
+
+  async function disableFamilyPush() {
+    if (pushBusy) return;
+    pushBusy = true;
+    try {
+      await api('push-unsubscribe', { body: {} });
+      writeJson(FAMILY_PUSH_KEY, null);
+      showToast('이 기기의 가족 알림을 껐어요.');
+    } catch (error) {
+      showToast(error.message || '알림을 끄지 못했어요.', 'info');
+    } finally {
+      pushBusy = false;
+      renderFamilyView();
+    }
+  }
+
+  // 구독 주소는 브라우저가 바꿀 수 있어서, 켜 둔 기기는 접속할 때 한 번 서버와 맞춘다.
+  async function syncFamilyPush() {
+    if (pushSynced || !isJoined() || !readJson(FAMILY_PUSH_KEY, null) || !pushSupported() || Notification.permission !== 'granted') return;
+    pushSynced = true;
+    try {
+      const config = await loadPushConfig();
+      if (!config.enabled) return;
+      const subscription = await currentSubscription(config, true);
+      await api('push-subscribe', { body: { subscription: subscription.toJSON() } });
+      writeJson(FAMILY_PUSH_KEY, { endpoint: subscription.endpoint });
+    } catch {
+      pushSynced = false;
+    }
+  }
+
+  function familyPushHtml() {
+    const on = Boolean(readJson(FAMILY_PUSH_KEY, null)) && 'Notification' in window && Notification.permission === 'granted';
+    let detail;
+    let action = '';
+    if (!pushSupported()) {
+      detail = needsHomeScreen() ? "아이폰은 공유 버튼 → '홈 화면에 추가'로 앱을 설치한 뒤 켤 수 있어요." : '이 브라우저는 닫힌 앱 알림을 지원하지 않아요.';
+    } else if (needsHomeScreen()) {
+      detail = "아이폰은 공유 버튼 → '홈 화면에 추가'로 앱을 설치한 뒤 켤 수 있어요.";
+    } else if (Notification.permission === 'denied') {
+      detail = '알림이 차단돼 있어요. 브라우저 설정에서 이 사이트의 알림을 허용해 주세요.';
+    } else if (on) {
+      detail = '켜져 있어요 · 출발 시간, 아직 출발 안 함, 도착·귀가 소식이 와요.';
+      action = `<button type="button" class="link-button" data-family-push-off ${pushBusy ? 'disabled' : ''}>이 기기에서 끄기</button>`;
+    } else {
+      detail = '출발 시간, 아직 출발 안 함, 도착·귀가 소식을 앱을 닫아도 받아요.';
+      action = `<button type="button" class="secondary-cta" data-family-push-on ${pushBusy ? 'disabled' : ''}><span class="material-symbols-rounded">notifications_active</span>${pushBusy ? '켜는 중…' : '알림 켜기'}</button>`;
+    }
+    return `<section class="family-push panel ${on ? 'is-on' : ''}"><h2><span class="material-symbols-rounded">notifications</span>앱을 닫아도 알림 받기</h2><p>${escapeHtml(detail)}</p>${action}</section>`;
+  }
+
   function renderJoined(section) {
     const chatFocus = section.querySelector('.family-chat :focus');
     const mine = myTrip();
@@ -1362,7 +1481,6 @@
     const accuracyLabel = Number.isFinite(locationAccuracy) ? `위치 정확도 ±${Math.round(locationAccuracy)}m` : '위치 정확도 확인 중';
     const departures = todaysDepartures();
     const activity = readJson(ACTIVITY_KEY, []).slice(0, 6);
-    const canNotify = 'Notification' in window && Notification.permission === 'default';
     const mapCard = section.querySelector('.family-map-card');
     section.dataset.mode = 'joined';
     section.innerHTML = `
@@ -1404,9 +1522,9 @@
         <div><span>초대 코드</span><strong>${escapeHtml(state.family.inviteCode)}</strong></div>
         <button type="button" class="secondary-cta" data-share-invite><span class="material-symbols-rounded">share</span>초대 링크 보내기</button>
       </section>
+      ${familyPushHtml()}
       ${activity.length ? `<section class="family-activity panel"><h2>최근 소식</h2>${activity.map((entry) => `<p><span class="material-symbols-rounded">${ACTIVITY_ICONS[entry.type] || 'near_me'}</span>${escapeHtml(entry.text)}<small>${formatAgo(entry.at)}</small></p>`).join('')}</section>` : ''}
       <div class="family-footer">
-        ${canNotify ? '<button type="button" class="link-button" data-enable-notifications><span class="material-symbols-rounded">notifications_active</span>출발·도착 알림 받기</button>' : ''}
         <button type="button" class="link-button danger" data-leave-family><span class="material-symbols-rounded">logout</span>가족에서 나가기</button>
       </div>
     `;
@@ -1537,8 +1655,10 @@
         disconnect(true);
         showToast('가족에서 나왔어요.');
       }
-    } else if (event.target.closest('[data-enable-notifications]')) {
-      Notification.requestPermission().then(() => renderFamilyView());
+    } else if (event.target.closest('[data-family-push-on]')) {
+      enableFamilyPush();
+    } else if (event.target.closest('[data-family-push-off]')) {
+      disableFamilyPush();
     } else {
       const memberButton = event.target.closest('[data-focus-member]');
       if (memberButton) {

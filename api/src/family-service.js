@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const { createFamilyChat } = require('./family-chat');
+const { validateSubscription } = require('./departure-push');
 
 // 가족 캘린더와 이동 공유 API의 핵심 로직.
 // Azure Functions(api/src/functions/family.js)와 로컬 server.js가 함께 사용한다.
@@ -22,6 +23,12 @@ const JOIN_FAILURE_LIMIT_PER_CLIENT = 10;
 const JOIN_FAILURE_LIMIT_GLOBAL = 100;
 const TRAVEL_MODES = new Set(['transit', 'walk', 'car']);
 const DEPART_NOTICE_OPTIONS = new Set([0, 10, 20, 30, 45, 60, 90]);
+const PUSH_INDEX_PARTITION = 'push-family';
+const PUSH_WINDOW_MS = 10 * 60 * 1000;
+const NO_SHOW_DELAY_MS = 5 * 60 * 1000;
+const END_WINDOW_MS = 30 * 60 * 1000;
+const PUSH_LOG_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
+const PUSH_SEND_TIMEOUT_MS = 6000;
 
 function koreaDate(timestamp) {
   return new Date(timestamp + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -126,7 +133,7 @@ function publicMember(member) {
   };
 }
 
-function createFamilyService({ store, now = () => Date.now() }) {
+function createFamilyService({ store, now = () => Date.now(), notifier = null }) {
   if (!store) throw new Error('A store is required.');
 
   const chat = createFamilyChat({ store, now, FamilyError });
@@ -545,6 +552,10 @@ function createFamilyService({ store, now = () => Date.now() }) {
     if (!event) return;
     await touchEventsRevision(family);
     await chat.arrival(context, event, trip);
+    const name = context.member?.name || '가족';
+    await notifySafely(family.id, await othersOf(family.id, trip.memberId), trip.returnFor
+      ? { title: `${name}님이 집에 왔어요`, body: `${event.title} 다녀왔어요`, tag: `arrive-${trip.id}` }
+      : { title: `${name}님이 도착했어요`, body: event.title, tag: `arrive-${trip.id}` });
   }
 
   async function checkNoShows(context, rows, trips, members) {
@@ -621,6 +632,11 @@ function createFamilyService({ store, now = () => Date.now() }) {
         { system: true, token: `late-${trip.id}` });
     }
     if (homeEvent) await chat.open(context, homeEvent, { home: true, tripId: trip.id });
+    if (linkedEvent || homeEvent) {
+      await notifySafely(family.id, await othersOf(family.id, member.id), linkedEvent ? {
+        title: `${member.name}님이 출발했어요`, body: `${linkedEvent.title}${linkedEvent.startTime ? ` · ${linkedEvent.startTime} 시작` : ''}`, tag: `trip-${trip.id}`
+      } : { title: `${member.name}님이 집으로 출발했어요`, body: `${homeEvent.title} 끝나고 집으로 가는 중`, tag: `trip-${trip.id}` });
+    }
     await recordArrival(context, trip, true);
     return { trip };
   }
@@ -671,6 +687,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
   async function leaveFamily(context) {
     const { family, member } = context;
     await store.remove(familyKey(family.id), `trip_${member.id}`);
+    await store.remove(familyKey(family.id), `push_${member.id}`);
     await store.remove(familyKey(family.id), `member_${member.id}`);
     const remaining = await listMembers(family.id);
     if (!remaining.length) {
@@ -681,6 +698,154 @@ function createFamilyService({ store, now = () => Date.now() }) {
       await store.remove('invite', family.inviteCode);
     }
     return { left: true };
+  }
+
+  // ---------- 앱을 닫아도 오는 가족 알림 (Web Push) ----------
+
+  async function pushSubscribe(context, body) {
+    const { family, member } = context;
+    let subscription;
+    try {
+      subscription = validateSubscription(body?.subscription);
+    } catch (error) {
+      throw new FamilyError(400, error.message || '푸시 구독 정보가 올바르지 않습니다.', 'INVALID_PUSH');
+    }
+    const updatedAt = new Date(now()).toISOString();
+    await store.put(familyKey(family.id), `push_${member.id}`, { subscription, updatedAt });
+    await store.put(PUSH_INDEX_PARTITION, family.id, { updatedAt });
+    return { subscribed: true, delivery: Boolean(notifier) };
+  }
+
+  async function pushUnsubscribe(context) {
+    await store.remove(familyKey(context.family.id), `push_${context.member.id}`);
+    return { subscribed: false };
+  }
+
+  async function sendToMembers(familyId, memberIds, payload) {
+    if (!notifier || !memberIds.length) return 0;
+    const targets = (await store.list(familyKey(familyId), 'push_'))
+      .filter(({ row }) => memberIds.includes(row.slice('push_'.length)));
+    let sent = 0;
+    await Promise.all(targets.map(async ({ row, value }) => {
+      try {
+        await notifier(value.subscription, { url: '/#family', ...payload });
+        sent += 1;
+      } catch (error) {
+        if ([404, 410].includes(error?.statusCode)) await store.remove(familyKey(familyId), row);
+      }
+    }));
+    return sent;
+  }
+
+  // 이동 소식은 요청을 막지 않도록 실패해도 무시하고, 오래 걸리면 기다리지 않는다.
+  async function notifySafely(familyId, memberIds, payload) {
+    if (!notifier) return;
+    let timer;
+    try {
+      await Promise.race([
+        sendToMembers(familyId, memberIds, payload),
+        new Promise((resolve) => { timer = setTimeout(resolve, PUSH_SEND_TIMEOUT_MS); })
+      ]);
+    } catch {
+      // 알림 실패가 출발·도착 기록을 막으면 안 된다.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function othersOf(familyId, memberId) {
+    return (await listMembers(familyId)).map((item) => item.id).filter((id) => id !== memberId);
+  }
+
+  function familyAlarmCandidates(family, members, rows, trips, currentTime) {
+    const today = koreaDate(currentTime);
+    const nameOf = (id) => members.find((item) => item.id === id)?.name || '가족';
+    const memberIds = members.map((item) => item.id);
+    const candidates = [];
+    for (const { value: event } of rows) {
+      if (event.date !== today || event.allDay || !event.startTime || !event.participants?.length) continue;
+      const start = Date.parse(`${event.date}T${event.startTime}:00+09:00`);
+      const end = event.endTime ? Date.parse(`${event.date}T${event.endTime}:00+09:00`) : null;
+      const participants = event.participants.filter((id) => memberIds.includes(id));
+      const departed = (id) => Boolean(event.departures?.[id] || event.arrivals?.[id]
+        || trips.some(({ value }) => value.memberId === id && value.eventId === event.id && value.status !== 'stopped'));
+      const others = (id) => memberIds.filter((other) => other !== id);
+      if (event.departNotice && Number.isFinite(start)) {
+        const notice = start - event.departNotice * 60000;
+        if (Date.parse(event.createdAt) <= notice) {
+          if (currentTime >= notice && currentTime <= notice + PUSH_WINDOW_MS && currentTime < start) {
+            for (const id of participants.filter((item) => !departed(item))) {
+              candidates.push({ key: `depart:${event.id}:${id}:${start}`, to: [id], payload: {
+                title: '출발할 시간이에요', body: `${event.title} ${event.startTime} 시작 · 앱에서 '출발'을 눌러 주세요`, tag: `depart-${event.id}` } });
+            }
+          }
+          if (currentTime >= notice + NO_SHOW_DELAY_MS && currentTime <= start + END_WINDOW_MS) {
+            for (const id of participants.filter((item) => !departed(item))) {
+              candidates.push({ key: `noshow:${event.id}:${id}:${start}`, to: others(id), payload: {
+                title: `${nameOf(id)}님이 아직 출발하지 않았어요`, body: `${event.title} · ${event.startTime} 시작`, tag: `noshow-${event.id}-${id}` } });
+            }
+          }
+        }
+      }
+      if (Number.isFinite(end) && currentTime >= end && currentTime <= end + END_WINDOW_MS) {
+        for (const id of participants.filter((item) => event.arrivals?.[item])) {
+          const goingHome = event.returnHome && !event.homeArrivals?.[id];
+          candidates.push({ key: `done:${event.id}:${id}:${end}`, to: others(id), payload: {
+            title: `${nameOf(id)}님이 ${event.title} 일정을 마쳤어요`, body: goingHome ? '이제 집으로 올 시간이에요' : '오늘 일정을 잘 마쳤어요', tag: `done-${event.id}-${id}` } });
+          if (goingHome) {
+            candidates.push({ key: `home:${event.id}:${id}:${end}`, to: [id], payload: {
+              title: `${event.title} 끝! 집에 갈 시간이에요`, body: "앱에서 '집으로 출발'을 누르면 가족이 함께 봐요", tag: `home-${event.id}` } });
+          }
+        }
+      }
+    }
+    return candidates.filter((item) => item.to.length);
+  }
+
+  async function dispatchFamily(family) {
+    const currentTime = now();
+    const [members, rows, trips] = await Promise.all([
+      listMembers(family.id),
+      store.list(familyKey(family.id), 'event_'),
+      store.list(familyKey(family.id), 'trip_')
+    ]);
+    // 아무도 앱을 열지 않아도 가족방의 '아직 출발하지 않았어요' 안내가 남도록 같은 검사를 돌린다.
+    await checkNoShows({ family }, rows, trips, members);
+    const candidates = familyAlarmCandidates(family, members, rows, trips, currentTime);
+    if (!candidates.length) return 0;
+    let claimed = [];
+    await store.update(familyKey(family.id), 'pushlog', (current) => {
+      const sent = Object.fromEntries(Object.entries(current?.sent || {})
+        .filter(([, at]) => currentTime - at < PUSH_LOG_KEEP_MS));
+      claimed = candidates.filter((item) => !sent[item.key]);
+      for (const item of claimed) sent[item.key] = currentTime;
+      return { sent };
+    });
+    let sent = 0;
+    for (const item of claimed) sent += await sendToMembers(family.id, item.to, item.payload);
+    return sent;
+  }
+
+  async function dispatchAlarms({ timeLimitMs = 20000 } = {}) {
+    if (!notifier) return { families: 0, sent: 0 };
+    const started = now();
+    let families = 0;
+    let sent = 0;
+    for (const { row: familyId } of await store.list(PUSH_INDEX_PARTITION)) {
+      if (now() - started > timeLimitMs) break;
+      const family = await store.get(familyKey(familyId), 'info');
+      if (!family || !(await store.list(familyKey(familyId), 'push_')).length) {
+        await store.remove(PUSH_INDEX_PARTITION, familyId);
+        continue;
+      }
+      families += 1;
+      try {
+        sent += await dispatchFamily(family);
+      } catch {
+        // 한 가족의 오류가 다른 가족 알림을 막지 않게 한다.
+      }
+    }
+    return { families, sent };
   }
 
   const publicActions = {
@@ -698,7 +863,9 @@ function createFamilyService({ store, now = () => Date.now() }) {
     'POST trip-start': startTrip,
     'POST trip-point': addTripPoints,
     'POST trip-end': endTrip,
-    'POST leave': leaveFamily
+    'POST leave': leaveFamily,
+    'POST push-subscribe': pushSubscribe,
+    'POST push-unsubscribe': pushUnsubscribe
   };
 
   async function handle({ method, action, body = {}, query = {}, credential, clientKey }) {
@@ -716,7 +883,7 @@ function createFamilyService({ store, now = () => Date.now() }) {
     throw new FamilyError(404, '가족 API 경로를 찾을 수 없습니다.', 'NOT_FOUND');
   }
 
-  return { handle, storageKind: store.kind };
+  return { handle, dispatchAlarms, storageKind: store.kind };
 }
 
 module.exports = { createFamilyService, FamilyError, distanceMeters, MAX_TRAIL_POINTS };

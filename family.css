@@ -99,6 +99,15 @@
 .family-invite .secondary-cta{width:auto;margin:0;padding:12px 16px}
 .invite-link-text{word-break:break-all;user-select:all}
 
+/* 앱을 닫아도 오는 가족 알림 */
+.family-push{padding:16px 18px;margin-bottom:14px}
+.family-push h2{display:flex;align-items:center;gap:6px;font-size:15px;margin-bottom:6px}
+.family-push h2 .material-symbols-rounded{font-size:19px;color:var(--family)}
+.family-push p{color:var(--muted);font-size:13px;line-height:1.5;margin-bottom:10px}
+.family-push.is-on{border-color:#bfe8d5;background:linear-gradient(135deg,#e9f8f1,#fff)}
+.family-push.is-on h2 .material-symbols-rounded{color:var(--green)}
+.family-push .secondary-cta{margin:0}
+
 /* 최근 소식 */
 .family-activity{padding:16px 18px;margin-bottom:14px}
 .family-activity p{display:flex;align-items:flex-start;gap:6px;padding:6px 0;color:var(--ink)!important}
