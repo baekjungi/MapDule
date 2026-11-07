@@ -105,7 +105,7 @@ test('browser push schedules UTC instants, cancels edited routes and retains fai
   const scheduled = JSON.parse(requests.find((item) => item.url.endsWith('schedule')).options.body);
   assert.match(scheduled.items[0].dueAt, /Z$/);
   assert.equal(scheduled.items[0].expiresAt, new Date('2026-12-01T14:00:00').toISOString());
-  assert.match(requests.find((item) => item.url.endsWith('schedule')).options.headers.Authorization, /^Bearer [A-Za-z0-9_-]{43}$/);
+  assert.match(requests.find((item) => item.url.endsWith('schedule')).options.headers['X-MapDule-Push-Token'], /^[A-Za-z0-9_-]{43}$/);
   cancellationFails = true;
   await browser.MapDulePush.reconcile([{ ...events[0], startTime: '12:30' }, events[1]]);
   assert.ok(values.has('mapdule-push-state'));

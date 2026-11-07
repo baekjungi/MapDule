@@ -17,7 +17,7 @@
   async function request(action, body) {
     const response = await fetch(`/api/push/${action}`, {
       method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(12000),
-      headers: body ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` } : {},
+      headers: body ? { 'Content-Type': 'application/json', 'X-MapDule-Push-Token': token() } : {},
       ...(body ? { body: JSON.stringify(body) } : {})
     });
     if (!/^application\/json/i.test(response.headers.get('content-type') || '')) throw new Error('알림 서버 응답을 확인하지 못했어요.');

@@ -223,7 +223,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
     }
-    const token = (request.headers.authorization || '').replace(/^Bearer /, '');
+    const token = request.headers['x-mapdule-push-token'] || (request.headers.authorization || '').replace(/^Bearer /, '');
     const result = await handleDeparturePushRequest(pushMatch[1], body, token, request.socket.remoteAddress, localPushOptions);
     sendJson(response, result.status, result.body, result.retryAfter);
     return;

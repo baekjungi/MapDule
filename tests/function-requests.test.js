@@ -90,3 +90,19 @@ for (const [file, route] of [['ai.js', 'ai-parse'], ['family.js', 'family'], ['m
     }
   });
 }
+
+test('push-dispatch reads the custom token header because Static Web Apps drops Authorization', async () => {
+  const previous = process.env.MAPDULE_PUSH_DISPATCH_KEY;
+  process.env.MAPDULE_PUSH_DISPATCH_KEY = 'k'.repeat(43);
+  try {
+    const call = (headers) => handlerFor('departure-push.js', 'push-dispatch')(new Request('https://app.example/api/push/dispatch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{}'
+    }), { error() {} });
+    assert.equal((await call({})).status, 401);
+    assert.equal((await call({ 'X-MapDule-Push-Token': 'wrong'.padEnd(43, 'x') })).status, 401);
+    assert.notEqual((await call({ 'X-MapDule-Push-Token': 'k'.repeat(43) })).status, 401);
+  } finally {
+    if (previous === undefined) delete process.env.MAPDULE_PUSH_DISPATCH_KEY;
+    else process.env.MAPDULE_PUSH_DISPATCH_KEY = previous;
+  }
+});

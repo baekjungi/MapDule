@@ -22,7 +22,9 @@ for (const action of ['status', 'schedule', 'cancel', 'dispatch']) {
         }
       }
       const client = (request.headers.get('x-forwarded-for') || '').split(',').at(-1)?.trim() || 'unknown';
-      const token = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
+      // Static Web Apps does not forward the Authorization header to managed APIs, so use a custom header.
+      const token = request.headers.get('x-mapdule-push-token')
+        || (request.headers.get('authorization') || '').replace(/^Bearer /, '');
       const result = await handleDeparturePushRequest(action, body, token, client);
       return new Response(JSON.stringify(result.body), { status: result.status, headers: {
         ...headers, ...(result.status === 429 ? { 'Retry-After': String(result.retryAfter) } : {})
