@@ -87,7 +87,7 @@ test('no departure or no-show push once the child has left', async () => {
   await service.dispatchAlarms();
   at('16:40');
   await service.dispatchAlarms();
-  assert.deepEqual(take(), []);
+  assert.deepEqual(take().filter((item) => /출발할 시간|아직 출발/.test(item.title)), []);
 });
 
 test('arrival, class end, return-home alarm and home arrival reach the right people', async () => {
@@ -124,4 +124,98 @@ test('expired subscriptions are dropped and dispatch is a no-op without push con
   await quiet.subscribe(quiet.child, 'child');
   assert.deepEqual(await quiet.service.dispatchAlarms(), { families: 0, sent: 0 });
   void child;
+});
+
+test('not-home alert reaches the family 30 minutes after class if the child has not come home', async () => {
+  const { service, call, parent, child, at, save, subscribe, start, take } = await setup();
+  await subscribe(parent, 'mom');
+  await subscribe(child, 'child');
+  const event = await save({ returnHome: true });
+  at('16:40');
+  const { trip } = await start(child, { eventId: event.id });
+  at('16:55');
+  await call(child, 'POST', 'trip-end', { tripId: trip.id, reason: 'arrived' });
+  at('18:30');
+  await service.dispatchAlarms();
+  take();
+  at('18:59');
+  await service.dispatchAlarms();
+  assert.deepEqual(take(), []);
+  at('19:00');
+  await service.dispatchAlarms();
+  const alert = take();
+  assert.deepEqual(alert.map((item) => [item.to, item.title]), [['mom', '준기님이 아직 집에 도착하지 않았어요']]);
+  assert.match(alert[0].body, /집으로 출발한 기록이 없어요/);
+  const messages = (await call(parent, 'GET', 'chat', { room: 'family' })).messages.map((item) => item.text);
+  assert.ok(messages.some((text) => text.includes('아직 집에 도착하지 않았어요')));
+  at('19:10');
+  await service.dispatchAlarms();
+  assert.deepEqual(take(), [], 'sent once');
+});
+
+test('no not-home alert once the child is home', async () => {
+  const { service, call, parent, child, at, save, subscribe, start, take } = await setup();
+  await subscribe(parent, 'mom');
+  const event = await save({ returnHome: true });
+  at('16:40');
+  const { trip } = await start(child, { eventId: event.id });
+  await call(child, 'POST', 'trip-end', { tripId: trip.id, reason: 'arrived' });
+  at('18:35');
+  const home = await start(child, { returnFor: event.id, destination: { lat: 37.6, lng: 127.1, name: '집' } });
+  await call(child, 'POST', 'trip-end', { tripId: home.trip.id, reason: 'arrived' });
+  take();
+  at('19:05');
+  await service.dispatchAlarms();
+  assert.deepEqual(take().filter((item) => item.title.includes('아직 집에')), []);
+});
+
+test('location-lost alert goes to the family and the traveller once when sharing stalls for 5 minutes', async () => {
+  const { service, call, parent, child, at, save, subscribe, start, take } = await setup();
+  await subscribe(parent, 'mom');
+  await subscribe(child, 'child');
+  const event = await save({ departNotice: 0 });
+  at('16:40');
+  await start(child, { eventId: event.id });
+  take();
+  at('16:44');
+  await service.dispatchAlarms();
+  assert.deepEqual(take(), []);
+  at('16:46');
+  await service.dispatchAlarms();
+  assert.deepEqual(take().map((item) => [item.to, item.title]).sort(),
+    [['child', '위치 공유가 멈췄어요'], ['mom', '준기님 위치가 잠시 끊겼어요']]);
+  at('16:50');
+  await service.dispatchAlarms();
+  assert.deepEqual(take(), []);
+  void call;
+});
+
+test('pickup request notifies the family with a location link and the acknowledgement goes back to the child', async () => {
+  const { call, parent, child, at, subscribe, take } = await setup();
+  await subscribe(parent, 'mom');
+  await subscribe(child, 'child');
+  at('18:35');
+  const { pickup } = await call(child, 'POST', 'pickup', { place: { lat: 37.501, lng: 127.002, accuracy: 15 }, label: '수학학원 앞' });
+  assert.equal(pickup.label, '수학학원 앞');
+  assert.deepEqual(take().map((item) => [item.to, item.title, item.body]), [['mom', '준기님이 데리러 와 달라고 했어요', '수학학원 앞 · 눌러서 위치를 확인해 주세요']]);
+  const family = (await call(parent, 'GET', 'chat', { room: 'family' })).messages.map((item) => item.text);
+  assert.ok(family.some((text) => text.includes('map.kakao.com/link/map/') && text.includes('37.501,127.002')));
+  assert.equal((await call(parent, 'GET', 'state')).pickups.length, 1);
+  await assert.rejects(call(child, 'POST', 'pickup-ack', { memberId: child.memberId }), (error) => error.code === 'INVALID_PICKUP');
+  const acked = await call(parent, 'POST', 'pickup-ack', { memberId: child.memberId });
+  assert.equal(acked.pickup.ackName, '엄마');
+  assert.deepEqual(take().map((item) => [item.to, item.title]), [['child', '엄마님이 확인했어요']]);
+  await call(parent, 'POST', 'pickup-ack', { memberId: child.memberId });
+  assert.deepEqual(take(), [], 'acknowledging twice does not notify twice');
+  at('19:06');
+  assert.equal((await call(parent, 'GET', 'state')).pickups.length, 0);
+});
+
+test('pickup requests are rate limited and work without a location', async () => {
+  const { call, child } = await setup();
+  const first = await call(child, 'POST', 'pickup', {});
+  assert.equal(first.pickup.place, null);
+  await call(child, 'POST', 'pickup', {});
+  await call(child, 'POST', 'pickup', {});
+  await assert.rejects(call(child, 'POST', 'pickup', {}), (error) => error.statusCode === 429);
 });

@@ -17,7 +17,7 @@ const ARRIVAL_RADIUS_METERS = 60;
 const ENDED_TRIP_VISIBLE_MS = 12 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 2 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMITS = { create: 3, join: 8, member: 240, message: 20 };
+const RATE_LIMITS = { create: 3, join: 8, member: 240, message: 20, pickup: 3 };
 const JOIN_FAILURE_WINDOW_MS = 10 * 60 * 1000;
 const JOIN_FAILURE_LIMIT_PER_CLIENT = 10;
 const JOIN_FAILURE_LIMIT_GLOBAL = 100;
@@ -29,6 +29,10 @@ const NO_SHOW_DELAY_MS = 5 * 60 * 1000;
 const END_WINDOW_MS = 30 * 60 * 1000;
 const PUSH_LOG_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
 const PUSH_SEND_TIMEOUT_MS = 6000;
+const NOT_HOME_DELAY_MS = 30 * 60 * 1000;
+const NOT_HOME_WINDOW_MS = 3 * 60 * 60 * 1000;
+const LOCATION_LOST_MS = 5 * 60 * 1000;
+const PICKUP_VISIBLE_MS = 30 * 60 * 1000;
 
 function koreaDate(timestamp) {
   return new Date(timestamp + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -328,6 +332,7 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
       events: events ? events.map(({ value }) => value) : null,
       trips: visibleTrips,
       rooms: await chat.rooms(context),
+      pickups: await listPickups(family.id),
       scheduleWarning: extended.limitReached ? '일정 한도로 반복 일정을 더 만들지 못했어요. 지난 일정을 정리해 주세요.' : null,
       serverTime: new Date(currentTime).toISOString()
     };
@@ -688,6 +693,7 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
     const { family, member } = context;
     await store.remove(familyKey(family.id), `trip_${member.id}`);
     await store.remove(familyKey(family.id), `push_${member.id}`);
+    await store.remove(familyKey(family.id), `pickup_${member.id}`);
     await store.remove(familyKey(family.id), `member_${member.id}`);
     const remaining = await listMembers(family.id);
     if (!remaining.length) {
@@ -761,6 +767,7 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
     const today = koreaDate(currentTime);
     const nameOf = (id) => members.find((item) => item.id === id)?.name || '가족';
     const memberIds = members.map((item) => item.id);
+    const others = (id) => memberIds.filter((other) => other !== id);
     const candidates = [];
     for (const { value: event } of rows) {
       if (event.date !== today || event.allDay || !event.startTime || !event.participants?.length) continue;
@@ -769,7 +776,6 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
       const participants = event.participants.filter((id) => memberIds.includes(id));
       const departed = (id) => Boolean(event.departures?.[id] || event.arrivals?.[id]
         || trips.some(({ value }) => value.memberId === id && value.eventId === event.id && value.status !== 'stopped'));
-      const others = (id) => memberIds.filter((other) => other !== id);
       if (event.departNotice && Number.isFinite(start)) {
         const notice = start - event.departNotice * 60000;
         if (Date.parse(event.createdAt) <= notice) {
@@ -798,6 +804,28 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
           }
         }
       }
+      // 수업이 끝나고 30분이 지나도 집 도착 기록이 없으면 가족에게 알린다.
+      if (event.returnHome && Number.isFinite(end) && currentTime >= end + NOT_HOME_DELAY_MS && currentTime <= end + NOT_HOME_WINDOW_MS) {
+        for (const id of participants.filter((item) => event.arrivals?.[item] && !event.homeArrivals?.[item])) {
+          const homeward = trips.some(({ value }) => value.memberId === id && value.returnFor === event.id && value.status === 'moving');
+          candidates.push({ key: `nothome:${event.id}:${id}:${end}`, to: others(id), payload: {
+            title: `${nameOf(id)}님이 아직 집에 도착하지 않았어요`,
+            body: homeward ? `${event.title} ${event.endTime} 끝 · 집으로 오는 중이에요` : `${event.title} ${event.endTime} 끝 · 집으로 출발한 기록이 없어요`,
+            tag: `nothome-${event.id}-${id}` },
+          notice: `${nameOf(id)}님이 '${event.title}'(${event.endTime} 끝) 이후 아직 집에 도착하지 않았어요` });
+        }
+      }
+    }
+    // 이동 중인데 5분 넘게 위치가 안 들어오면 (화면 꺼짐, 배터리, 지하철) 한 번 알린다.
+    for (const { value: trip } of trips) {
+      if (trip.status !== 'moving' || !memberIds.includes(trip.memberId)) continue;
+      const lastAt = Date.parse(trip.updatedAt || trip.startedAt);
+      if (!Number.isFinite(lastAt) || currentTime - lastAt < LOCATION_LOST_MS) continue;
+      const clock = new Date(lastAt + 9 * 3600000).toISOString().slice(11, 16);
+      candidates.push({ key: `lost:${trip.id}`, to: others(trip.memberId), payload: {
+        title: `${nameOf(trip.memberId)}님 위치가 잠시 끊겼어요`, body: `${clock} 이후 위치가 들어오지 않아요 · 화면이 꺼졌거나 신호가 약할 수 있어요`, tag: `lost-${trip.id}` } });
+      candidates.push({ key: `lostself:${trip.id}`, to: [trip.memberId], payload: {
+        title: '위치 공유가 멈췄어요', body: '앱을 열면 가족에게 위치를 다시 보내요', tag: `lost-${trip.id}` } });
     }
     return candidates.filter((item) => item.to.length);
   }
@@ -822,7 +850,10 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
       return { sent };
     });
     let sent = 0;
-    for (const item of claimed) sent += await sendToMembers(family.id, item.to, item.payload);
+    for (const item of claimed) {
+      if (item.notice) await chat.append({ family }, 'family', item.notice, { system: true, token: item.key.replace(/:/g, '-') });
+      sent += await sendToMembers(family.id, item.to, item.payload);
+    }
     return sent;
   }
 
@@ -841,11 +872,55 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
       families += 1;
       try {
         sent += await dispatchFamily(family);
-      } catch {
-        // 한 가족의 오류가 다른 가족 알림을 막지 않게 한다.
+      } catch (error) {
+        // 한 가족의 오류가 다른 가족 알림을 막지 않게 하되, 원인은 로그로 남긴다.
+        console.error(`Family alarm dispatch failed: ${error?.message || error}`);
       }
     }
     return { families, sent };
+  }
+
+  // ---------- 데리러 와 줘 ----------
+
+  async function listPickups(familyId) {
+    const visible = [];
+    for (const { row, value } of await store.list(familyKey(familyId), 'pickup_')) {
+      if (now() - Date.parse(value.at) > PICKUP_VISIBLE_MS) await store.remove(familyKey(familyId), row);
+      else visible.push(value);
+    }
+    return visible;
+  }
+
+  async function requestPickup(context, body) {
+    const { family, member } = context;
+    const point = cleanCoordinate(body?.place);
+    const accuracy = Number(body?.place?.accuracy);
+    const place = point && (!Number.isFinite(accuracy) || accuracy <= MAX_STORED_ACCURACY_METERS)
+      ? { ...point, ...(Number.isFinite(accuracy) ? { accuracy: Math.round(accuracy) } : {}) } : null;
+    const label = cleanText(body?.label, 60, '장소') || '';
+    const pickup = { memberId: member.id, name: member.name, at: new Date(now()).toISOString(), place, label, ackBy: null, ackName: null, ackAt: null };
+    await store.put(familyKey(family.id), `pickup_${member.id}`, pickup);
+    const link = place ? `https://map.kakao.com/link/map/${encodeURIComponent(`${member.name} 위치`)},${place.lat},${place.lng}` : '';
+    await chat.append(context, 'family', `${member.name}님이 데리러 와 달라고 했어요${label ? ` · ${label}` : ''}${link ? `\n위치 보기: ${link}` : ''}`,
+      { system: true, token: `pickup-${member.id}-${now()}` });
+    await notifySafely(family.id, await othersOf(family.id, member.id), {
+      title: `${member.name}님이 데리러 와 달라고 했어요`, body: label ? `${label} · 눌러서 위치를 확인해 주세요` : '눌러서 위치를 확인해 주세요', tag: `pickup-${member.id}` });
+    return { pickup };
+  }
+
+  async function acknowledgePickup(context, body) {
+    const { family, member } = context;
+    const memberId = typeof body?.memberId === 'string' ? body.memberId : '';
+    if (!/^[A-Za-z0-9_-]{6,64}$/.test(memberId) || memberId === member.id) throw new FamilyError(400, '확인할 요청을 찾을 수 없어요.', 'INVALID_PICKUP');
+    const current = await store.get(familyKey(family.id), `pickup_${memberId}`);
+    if (!current || now() - Date.parse(current.at) > PICKUP_VISIBLE_MS) throw new FamilyError(404, '요청이 이미 끝났어요.', 'PICKUP_NOT_FOUND');
+    if (current.ackBy) return { pickup: current };
+    const pickup = await store.update(familyKey(family.id), `pickup_${memberId}`, (value) => value && !value.ackBy
+      ? { ...value, ackBy: member.id, ackName: member.name, ackAt: new Date(now()).toISOString() } : value);
+    if (pickup.ackBy !== member.id) return { pickup };
+    await chat.append(context, 'family', `${member.name}님이 확인했어요. 데리러 갈게요`, { system: true, token: `pickup-ack-${memberId}-${now()}` });
+    await notifySafely(family.id, [memberId], { title: `${member.name}님이 확인했어요`, body: '곧 데리러 갈게요', tag: `pickup-${memberId}` });
+    return { pickup };
   }
 
   const publicActions = {
@@ -865,7 +940,9 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
     'POST trip-end': endTrip,
     'POST leave': leaveFamily,
     'POST push-subscribe': pushSubscribe,
-    'POST push-unsubscribe': pushUnsubscribe
+    'POST push-unsubscribe': pushUnsubscribe,
+    'POST pickup': requestPickup,
+    'POST pickup-ack': acknowledgePickup
   };
 
   async function handle({ method, action, body = {}, query = {}, credential, clientKey }) {
@@ -878,6 +955,7 @@ function createFamilyService({ store, now = () => Date.now(), notifier = null })
       enforceRateLimit(clientKey, 'member');
       const context = await authenticate(credential);
       if (key === 'POST message' || key === 'POST chat-send') enforceRateLimit(context.member.id, 'message');
+      if (key === 'POST pickup') enforceRateLimit(context.member.id, 'pickup');
       return String(method).toUpperCase() === 'GET' ? memberActions[key](context, query || {}) : memberActions[key](context, body || {});
     }
     throw new FamilyError(404, '가족 API 경로를 찾을 수 없습니다.', 'NOT_FOUND');

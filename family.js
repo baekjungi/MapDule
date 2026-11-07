@@ -346,7 +346,7 @@
   const SPEED_KMH = { walk: [4.5, 4.5], transit: [20, 70], car: [25, 85] };
   const MODE_LABELS = { walk: '도보', transit: '대중교통', car: '자동차' };
   const MODE_ICONS = { walk: 'directions_walk', transit: 'directions_subway', car: 'directions_car' };
-  const ACTIVITY_ICONS = { departed: 'near_me', arrived: 'where_to_vote', completed: 'task_alt', dayDone: 'celebration', home: 'home', noShow: 'warning' };
+  const ACTIVITY_ICONS = { departed: 'near_me', arrived: 'where_to_vote', completed: 'task_alt', dayDone: 'celebration', home: 'home', noShow: 'warning', pickup: 'hail' };
 
   let credential = readText(CREDENTIAL_KEY);
   let state = credential ? readJson(STATE_CACHE_KEY, null) : null;
@@ -654,7 +654,20 @@
         const eventsChanged = next.events !== null;
         const changes = detectTripChanges(state?.trips, next.trips, next.members);
         const previousRooms = state?.rooms;
+        const previousPickups = state?.pickups || [];
+        const hadState = Boolean(state?.family);
         state = { ...next, events: eventsChanged ? next.events : state?.events || [] };
+        if (hadState) {
+          for (const pickup of state.pickups || []) {
+            const old = previousPickups.find((item) => item.memberId === pickup.memberId && item.at === pickup.at);
+            if (!old && pickup.memberId !== state.me) {
+              const message = `${pickup.name}님이 데리러 와 달라고 했어요${pickup.label ? ` · ${pickup.label}` : ''}`;
+              recordActivity([{ type: 'pickup', memberId: pickup.memberId, text: message, at: pickup.at }]);
+            } else if (old && !old.ackBy && pickup.ackBy && pickup.memberId === state.me) {
+              showToast(`${pickup.ackName}님이 확인했어요. 곧 데리러 와요.`, 'success');
+            }
+          }
+        }
         if (previousRooms) {
           for (const room of state.rooms || []) {
             const old = previousRooms.find((item) => item.key === room.key);
@@ -1070,6 +1083,8 @@
     let text = `${name} · 이동 중`;
     if (estimate) text += ` · 약 ${estimate.minutes}분 남음 (${formatClock(estimate.arrival)} 도착 예상)`;
     if (estimate?.meters <= 1000) text += ` · 목적지까지 약 ${formatDistance(estimate.meters)}`;
+    const lost = last && Date.now() - Date.parse(trip.updatedAt || last.at) > 5 * 60 * 1000;
+    if (lost) return { tone: 'stale', icon: 'location_off', text: `${name} · 위치 끊김 · 마지막 위치 ${formatAgo(last.at)}` };
     if (stale) text += ` · 위치 ${formatAgo(last.at)}`;
     return {
       tone: estimate?.lateMinutes ? 'late' : stale ? 'stale' : 'moving',
@@ -1452,6 +1467,80 @@
     }
   }
 
+  // ---------- 데리러 와 줘 ----------
+
+  function pickups() {
+    return (state?.pickups || []).filter((item) => Date.now() - Date.parse(item.at) <= 30 * 60 * 1000);
+  }
+
+  function pickupLabel() {
+    const today = localDateString(new Date());
+    const nowClock = formatClock(new Date());
+    const arrived = familyEvents()
+      .filter((event) => event.date === today && event.arrivals?.[me()] && !event.homeArrivals?.[me()] && (event.startTime || '') <= nowClock)
+      .sort((first, second) => (second.startTime || '').localeCompare(first.startTime || ''))[0];
+    if (arrived) return `${arrived.location || arrived.title} 앞`;
+    const trip = myTrip();
+    return trip?.status === 'moving' && trip.destination?.name ? `${trip.destination.name} 가는 길` : '';
+  }
+
+  function currentPlace() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude, accuracy: Math.round(position.coords.accuracy) }),
+        () => resolve(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 });
+    });
+  }
+
+  async function requestPickup() {
+    if (busy) return;
+    if (!confirm("가족에게 '데리러 와 줘'를 보낼까요? 지금 위치도 함께 보내요.")) return;
+    busy = true;
+    renderFamilyView();
+    try {
+      const place = await currentPlace();
+      const { pickup } = await api('pickup', { body: { place, label: pickupLabel() } });
+      state.pickups = [...pickups().filter((item) => item.memberId !== me()), pickup];
+      showToast('가족에게 알렸어요. 확인하면 알려 드릴게요.', 'success');
+    } catch (error) {
+      showToast(error.message || '요청을 보내지 못했어요.', 'info');
+    } finally {
+      busy = false;
+      renderFamilyView();
+      refresh();
+    }
+  }
+
+  async function acknowledgePickup(memberId) {
+    try {
+      const { pickup } = await api('pickup-ack', { body: { memberId } });
+      state.pickups = [...pickups().filter((item) => item.memberId !== memberId), pickup];
+      showToast(`${pickup.name}님에게 '확인했어요'를 보냈어요.`, 'success');
+    } catch (error) {
+      showToast(error.message || '확인을 보내지 못했어요.', 'info');
+    }
+    renderFamilyView();
+  }
+
+  function pickupsHtml() {
+    const list = pickups();
+    if (!list.length) return '';
+    return list.map((item) => {
+      const mine = item.memberId === me();
+      const map = item.place ? `https://map.kakao.com/link/map/${encodeURIComponent(`${item.name} 위치`)},${item.place.lat},${item.place.lng}` : '';
+      const status = item.ackBy ? `${item.ackBy === me() ? '내가' : `${item.ackName}님이`} 확인했어요 · 데리러 가는 중` : mine ? '가족이 확인하면 알려 드려요' : '';
+      return `<section class="pickup-banner panel ${item.ackBy ? 'is-acked' : ''}" role="status">
+        <h2><span class="material-symbols-rounded">hail</span>${mine ? "'데리러 와 줘'를 보냈어요" : `${escapeHtml(item.name)}님이 데리러 와 달라고 했어요`}</h2>
+        <p>${escapeHtml([item.label, formatAgo(item.at)].filter(Boolean).join(' · '))}${status ? `<br><b>${escapeHtml(status)}</b>` : ''}</p>
+        <div class="pickup-actions">
+          ${map ? `<a class="secondary-cta" href="${map}" target="_blank" rel="noopener"><span class="material-symbols-rounded">map</span>위치 보기</a>` : ''}
+          ${!mine && !item.ackBy ? `<button type="button" class="primary-cta" data-pickup-ack="${escapeHtml(item.memberId)}"><span class="material-symbols-rounded">check</span>확인했어요</button>` : ''}
+        </div>
+      </section>`;
+    }).join('');
+  }
+
   function familyPushHtml() {
     const on = Boolean(readJson(FAMILY_PUSH_KEY, null)) && 'Notification' in window && Notification.permission === 'granted';
     let detail;
@@ -1486,6 +1575,7 @@
     section.innerHTML = `
       ${heading(state.family.name, `가족 ${members().length}명 · 서로의 일정과 이동을 함께 봐요`)}
       ${state.scheduleWarning ? `<p role="status">${escapeHtml(state.scheduleWarning)}</p>` : ''}
+      ${pickupsHtml()}
       ${todayBoardHtml()}
       <section class="family-share panel ${sharing ? 'is-sharing' : ''}">
         ${sharing ? `
@@ -1505,6 +1595,7 @@
               <time>${escapeHtml(event.startTime)}</time><span><b>${escapeHtml(event.title)}</b><small>${escapeHtml(event.location)}</small></span><em>출발</em>
             </button>`).join('')}</div>` : ''}
           <button type="button" class="secondary-cta" data-free-depart ${busy ? 'disabled' : ''}><span class="material-symbols-rounded">add_location_alt</span>${departures.length ? '다른 곳으로 출발' : '지금 출발 알리기'}</button>`}
+        <button type="button" class="link-button pickup-button" data-pickup ${busy ? 'disabled' : ''}><span class="material-symbols-rounded">hail</span>데리러 와 줘</button>
       </section>
       <div class="family-chat-slot"></div>
       <div class="family-map-slot"></div>
@@ -1655,6 +1746,10 @@
         disconnect(true);
         showToast('가족에서 나왔어요.');
       }
+    } else if (event.target.closest('[data-pickup]')) {
+      requestPickup();
+    } else if (event.target.closest('[data-pickup-ack]')) {
+      acknowledgePickup(event.target.closest('[data-pickup-ack]').dataset.pickupAck);
     } else if (event.target.closest('[data-family-push-on]')) {
       enableFamilyPush();
     } else if (event.target.closest('[data-family-push-off]')) {

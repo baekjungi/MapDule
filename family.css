@@ -99,6 +99,17 @@
 .family-invite .secondary-cta{width:auto;margin:0;padding:12px 16px}
 .invite-link-text{word-break:break-all;user-select:all}
 
+/* 데리러 와 줘 */
+.pickup-banner{padding:16px 18px;margin-bottom:14px;border-color:#f3c6b3;background:linear-gradient(135deg,#fff1ea,#fff)}
+.pickup-banner.is-acked{border-color:#bfe8d5;background:linear-gradient(135deg,#e9f8f1,#fff)}
+.pickup-banner h2{display:flex;align-items:center;gap:6px;font-size:15px;margin-bottom:6px}
+.pickup-banner h2 .material-symbols-rounded{font-size:20px;color:#c9532b}
+.pickup-banner p{color:var(--muted);font-size:13px;line-height:1.5;margin-bottom:10px}
+.pickup-banner p b{color:var(--ink)}
+.pickup-actions{display:flex;gap:8px;flex-wrap:wrap}
+.pickup-actions .primary-cta,.pickup-actions .secondary-cta{width:auto;margin:0;padding:10px 14px;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+.family-share .pickup-button{margin-top:10px;color:#c9532b}
+
 /* 앱을 닫아도 오는 가족 알림 */
 .family-push{padding:16px 18px;margin-bottom:14px}
 .family-push h2{display:flex;align-items:center;gap:6px;font-size:15px;margin-bottom:6px}
