@@ -270,3 +270,22 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),textarea,sel
 body.calendar-visible .calendar-controls .text-icon{min-width:36px;min-height:36px}
 body.calendar-visible .calendar-today-button,body.calendar-visible .view-select-label{min-height:36px}
 }
+.family-more-panel{margin-top:14px}
+.family-more-panel>summary{padding:16px 12px;margin-bottom:12px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--muted);font-size:13px;font-weight:700;cursor:pointer}
+@media(max-width:680px){
+.app-shell .topbar{height:68px;min-height:68px;flex-wrap:nowrap;gap:8px;padding:8px 0}
+.app-shell .top-actions{position:relative;width:auto;margin-left:auto;gap:4px;justify-content:flex-end}
+.app-shell .top-actions .family-header-button,.brand>span:last-child small{display:none}
+.app-shell .top-actions .calendar-menu-button,.app-shell .top-actions .ai-register-button,.app-shell .top-actions .top-more-button,.app-shell .top-actions .avatar{width:44px;height:44px;min-width:44px;padding:0;margin:0;place-items:center}
+.app-shell .top-actions .ai-register-button,.app-shell .top-actions .top-more-button{display:grid}
+.app-shell .top-actions .ai-register-button>span:not(.material-symbols-rounded){display:none}
+.app-shell .top-secondary-actions{display:none;position:absolute;top:52px;right:0;z-index:50;min-width:210px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 8px 24px #20243a22}
+.app-shell .more-open .top-secondary-actions{display:grid;gap:6px}
+.app-shell .top-secondary-actions .status-pill{display:flex;font-size:12px}
+.app-shell .top-secondary-actions .icon-button{display:flex;width:100%;height:44px;gap:10px;padding:8px 12px;justify-content:flex-start}
+.app-shell .top-action-label{display:inline;font-size:13px}
+.departure-backdrop{place-items:end center;padding:0}
+.departure-modal{width:100%;max-height:calc(100dvh - 16px);overflow-y:auto;border-radius:20px 20px 0 0;padding:24px 20px calc(20px + env(safe-area-inset-bottom))}
+.family-share .secondary-cta{width:100%;min-height:48px;justify-content:center}
+.departure-item{min-height:52px}
+}

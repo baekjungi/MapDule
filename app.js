@@ -12,6 +12,24 @@ let displayedMonth = new Date();
 let calendarViewMode = 'month';
 let analyzedScheduleEvents = [];
 let aiPromptRevision = 0;
+const topMoreButton = document.querySelector('.top-more-button');
+function closeTopMoreMenu() {
+  document.querySelector('.top-actions')?.classList.remove('more-open');
+  topMoreButton?.setAttribute('aria-expanded', 'false');
+}
+topMoreButton?.addEventListener('click', () => {
+  const open = document.querySelector('.top-actions').classList.toggle('more-open');
+  topMoreButton.setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.top-actions') || event.target.closest('.top-secondary-actions button')) closeTopMoreMenu();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && topMoreButton?.getAttribute('aria-expanded') === 'true') {
+    closeTopMoreMenu();
+    topMoreButton.focus();
+  }
+});
 const visibleCalendars = new Set(['family', 'personal', 'work', 'health', 'other']);
 const calendarGroups = [
   { id: 'family', name: '우리 가족', color: '#ef7d57', categories: ['가족'] },
@@ -196,6 +214,7 @@ function clearDemoContent() {
     <div id="kakao-map" class="kakao-map-canvas" aria-label="카카오 지도"></div>
     <div class="map-empty"><span class="material-symbols-rounded">map</span><b>카카오 지도 키를 설정해 주세요</b><small>index.html의 kakao-javascript-key 항목에 JavaScript 키를 입력합니다.</small></div>
     <div class="map-top"><span><i></i>경로 대기 중</span><button class="map-location-button" type="button" aria-label="현재 위치 표시"><span class="material-symbols-rounded">my_location</span>내 위치</button></div>
+    <p class="map-location-feedback" role="status" aria-live="polite" hidden></p>
   `;
   document.querySelector('.timeline').innerHTML = `
     <div class="empty-state panel">
@@ -474,6 +493,7 @@ function initializeKakaoMap() {
 initializeKakaoMap();
 
 function showLocationPermissionDialog({ title, description, details, actionLabel, onContinue, onCancel }) {
+  const previousFocus = document.activeElement;
   const modal = document.createElement('div');
   modal.className = 'modal-backdrop location-permission-backdrop';
   modal.innerHTML = `
@@ -489,29 +509,47 @@ function showLocationPermissionDialog({ title, description, details, actionLabel
   const close = (cancelled) => {
     if (closed) return;
     closed = true;
+    document.removeEventListener('keydown', onKeyDown);
     modal.remove();
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     if (cancelled) onCancel?.();
   };
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+    } else if (event.key === 'Tab') {
+      const buttons = [...modal.querySelectorAll('button')];
+      const next = buttons[(buttons.indexOf(document.activeElement) + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length];
+      event.preventDefault();
+      next.focus();
+    }
+  };
+  document.addEventListener('keydown', onKeyDown);
   modal.addEventListener('click', (event) => {
     if (event.target === modal || event.target.closest('.modal-close, .location-permission-cancel')) {
       close(true);
       return;
     }
     if (event.target.closest('.location-permission-continue')) {
-      onContinue?.();
       close(false);
+      onContinue?.();
     }
   });
   modal.querySelector('.modal-close').focus();
 }
 
-function requestLocationWithConsent({ title, description, actionLabel }) {
+function requestLocationWithConsent({ title, description, actionLabel, consentGiven = false }) {
   return new Promise((resolve, reject) => {
     const cancel = () => reject(Object.assign(new Error('위치 확인을 취소했어요.'), { code: 'LOCATION_CANCELLED' }));
     const settingsDetails = /iPhone|iPad|iPod/i.test(navigator.userAgent)
       ? ['Safari 주소창의 aA > 웹 사이트 설정 > 위치에서 허용해 주세요.', '설정을 바꾼 뒤 돌아와 다시 확인을 눌러 주세요.']
       : ['주소창 왼쪽의 사이트 정보 아이콘 > 위치 > 허용을 선택해 주세요.', '설정을 바꾼 뒤 돌아와 다시 확인을 눌러 주세요.'];
     const requestPosition = () => {
+      if (!window.isSecureContext) {
+        reject(new Error('위치 기능은 HTTPS 연결에서만 사용할 수 있어요.'));
+        return;
+      }
       if (!navigator.geolocation) {
         reject(new Error('이 브라우저에서는 위치 기능을 사용할 수 없습니다.'));
         return;
@@ -550,8 +588,7 @@ function requestLocationWithConsent({ title, description, actionLabel }) {
       permissionQuery = Promise.resolve('prompt');
     }
     permissionQuery.then((permission) => {
-      if (permission === 'granted') requestPosition();
-      else if (permission === 'denied') {
+      if (permission === 'denied') {
         showLocationPermissionDialog({
           title: '위치 권한이 꺼져 있어요',
           description: '브라우저 설정에서 위치 권한을 허용해야 현재 위치와 이동 거리를 확인할 수 있어요.',
@@ -560,18 +597,31 @@ function requestLocationWithConsent({ title, description, actionLabel }) {
           onContinue: requestPosition,
           onCancel: cancel
         });
-      } else showPrepermission();
+      } else if (permission === 'granted' || consentGiven) requestPosition();
+      else showPrepermission();
     });
   });
 }
 
 async function showCurrentLocation() {
+  const feedback = document.querySelector('.map-location-feedback');
+  const report = (message) => {
+    if (feedback) {
+      feedback.hidden = false;
+      feedback.textContent = message;
+    }
+  };
   if (!kakaoMap || !window.kakao?.maps) {
+    report('지도를 불러온 뒤 내 위치를 다시 눌러 주세요.');
     showToast('카카오 지도가 아직 준비되지 않았습니다.', 'info');
     return;
   }
   const locationButton = document.querySelector('.map-location-button');
-  if (locationButton) locationButton.disabled = true;
+  if (locationButton) {
+    locationButton.disabled = true;
+    locationButton.setAttribute('aria-busy', 'true');
+  }
+  report('현재 위치를 확인하고 있어요. 위치 권한을 허용해 주세요.');
   try {
     const position = await requestLocationWithConsent({
       title: '내 위치를 지도에서 확인할까요?',
@@ -588,11 +638,16 @@ async function showCurrentLocation() {
     kakaoMap.setLevel(4);
     kakaoMap.panTo(coords);
     document.querySelector('.status-pill').innerHTML = '<i></i>현재 위치 표시됨';
+    report(`내 위치를 표시했어요.${Number.isFinite(position.coords.accuracy) ? ` 정확도 약 ±${Math.round(position.coords.accuracy)}m` : ''} · 이 버튼은 위치 공유를 시작하지 않아요.`);
     showToast('현재 위치를 지도에 표시했습니다.', 'success');
   } catch (error) {
+    report(error.code === 'LOCATION_CANCELLED' ? '위치 확인을 취소했어요. 내 위치를 눌러 다시 시도할 수 있어요.' : error.message || '현재 위치를 가져오지 못했습니다.');
     if (error.code !== 'LOCATION_CANCELLED') showToast(error.message || '현재 위치를 가져오지 못했습니다.', 'info');
   } finally {
-    if (locationButton) locationButton.disabled = false;
+    if (locationButton) {
+      locationButton.disabled = false;
+      locationButton.setAttribute('aria-busy', 'false');
+    }
   }
 }
 
@@ -1992,7 +2047,7 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     }
     statusElement.textContent = permission === 'granted'
       ? `${count} 이 탭이 열려 있는 동안 출발 시각에 알려 드려요. 탭을 닫으면 알림이 오지 않아요.`
-      : `${count} 브라우저 알림이 꺼져 있어 앱 화면이 열려 있을 때만 알려 드려요. 알림을 받으려면 주소창의 사이트 정보에서 알림을 허용해 주세요.`;
+      : `백그라운드 알림은 켜지지 않았어요. 앱 화면이 열려 있을 때만 출발 알림 ${targets.length}개를 표시해요. Chrome·Edge 또는 홈 화면에 설치한 앱에서 이 사이트의 알림을 허용해 주세요. VS Code 내장 브라우저 대신 실제 브라우저를 사용해 주세요.`;
     checkDepartureReminders();
   }
 

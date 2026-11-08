@@ -18,7 +18,10 @@ test('midpoint has an accessible entry and new styles preserve the font import',
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
   assert.match(html, /data-view="midpoint" aria-label="약속 지점 찾기" title="약속 지점 찾기"/);
   assert.match(styles, /^@import url\(/);
-  assert.match(styles, /\.app-shell \.topbar:has\(\[data-view="midpoint"\]\)\{[^}]*flex-wrap:wrap/);
+  const familyStyles = fs.readFileSync(path.join(root, 'family.css'), 'utf8');
+  assert.match(html, /aria-controls="top-secondary-actions"/);
+  assert.match(familyStyles, /\.app-shell \.top-secondary-actions\{display:none/);
+  assert.match(familyStyles, /\.app-shell \.more-open \.top-secondary-actions\{display:grid/);
 });
 
 test('keeps the family refresh control accessible at narrow mobile widths', () => {
@@ -28,6 +31,20 @@ test('keeps the family refresh control accessible at narrow mobile widths', () =
 
   assert.match(html, /class="sync-button" type="button" aria-label="가족 새로고침" title="가족 새로고침"/);
   assert.match(styles, /@media\(max-width:360px\)\{\.date-heading \.sync-button\{[^}]*flex:0 0 44px/);
+});
+
+test('closed mobile calendar menus stay out of keyboard and accessibility navigation', () => {
+  const root = path.resolve(__dirname, '..');
+  const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+
+  assert.match(styles, /@media\(max-width:680px\)\{body\.calendar-visible \.calendar-sidebar\{visibility:hidden\}body\.calendar-visible\.sidebar-open \.calendar-sidebar\{visibility:visible\}\}/);
+});
+
+test('single-day event badges fit their available width before truncating long titles', () => {
+  const root = path.resolve(__dirname, '..');
+  const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+
+  assert.match(styles, /\.single-day-view>\.event-badge\{width:100%;max-width:600px/);
 });
 
 test('family chat ships inside the original family assets with Korean UI', () => {

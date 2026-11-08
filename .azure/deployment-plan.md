@@ -14,6 +14,11 @@ departure-push update to main, then verify the existing deployment pipeline.
 Keep all current Azure resources and secrets unchanged. Real route keys and the
 external push scheduler remain operator configuration, not part of this redeploy.
 
+Current request (2026-11-08): simplify the mobile UI, require explicit walk/car/transit
+selection before every departure, improve location consent and feedback, test, commit,
+push and redeploy through the existing pipeline. Concurrent notification work is
+excluded from this commit; preserve those unstaged changes.
+
 ## 2. Existing deployment
 
 - Repository: baekjungi/MapDule, branch main.
@@ -44,6 +49,10 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 - Include the server-owned route-estimation module, AI summary fallback and mobile refresh accessibility fixes.
 - Include the completed frontend coordinate resolution and opt-in departure reminder follow-up.
 - Preserve existing changes; deploy the reviewed application files and their tests together without exposing local data or secrets.
+- Simplify mobile header navigation and collapse secondary family settings.
+- Select a transport mode before free, event, return and alarm-triggered departures.
+- Request location only after confirmation, with settings retry, Escape cancellation
+  and persistent map accuracy/error feedback.
 
 ## 5. Validation
 
@@ -125,3 +134,29 @@ Validation recorded at 2026-11-07T23:39:54+09:00 through azure-validate.
   existing GitHub Actions token for the same Static Web App; no provisioning commands are needed.
 - Actual external-route calls and closed-app push delivery require operator configuration and
   were not validated here. Monitor the pipeline, then verify production assets and the new APIs.
+
+### 2026-11-08 mobile departure redeployment
+
+Validated through azure-validate on 2026-11-08 (Asia/Seoul).
+
+- `npm run check`, `npm test`, `npm run build`, `git diff --cached --check`: passed
+  on the isolated staged application snapshot; 132 tests passed, zero failures.
+- The shared worktree additionally passed all 138 tests. Concurrent notification
+  changes and their six tests remain unstaged and are excluded from this deployment.
+- Chromium tested the exact staged snapshot at 320, 360, 390, 430, 680 and 1280px:
+  no horizontal overflow, accessible more menu, collapsible family settings whose
+  open state survives refresh, and departure actions visible within the mobile sheet.
+- Browser tests with controlled family/GPS responses verified walk/car/transit
+  selection reaches the trip API; closing the chooser requests no GPS; event
+  departures use the same chooser; blocked permission and GPS timeout save no trip.
+- Map location feedback reports accuracy and supports cancellation without leaving
+  the button disabled. No uncaught browser errors were observed.
+- Existing main and origin/main matched before staging. GitHub authentication and
+  the existing Static Web App deployment-token secret were verified.
+- Deployment keeps the same existing GitHub Actions target and token; no Azure
+  infrastructure, SKU, roles, storage schema or secret values change. Static
+  geolocation permissions and guest API access remain intact. No managed-identity
+  or role-assignment provisioning is involved in this frontend-only update.
+- Real-device GPS accuracy, external route providers and closed-app push delivery
+  are not claimed by the controlled browser tests. Verify the matching workflow
+  and production asset hashes after pushing.

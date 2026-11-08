@@ -840,14 +840,15 @@
 
   // ---------- 출발~도착 위치 공유 ----------
 
-  function getPosition() {
+  function getPosition(consentGiven = false) {
     if (typeof window.requestLocationWithConsent !== 'function') {
       return Promise.reject(new Error('위치 권한 요청을 시작할 수 없습니다. 페이지를 새로고침해 주세요.'));
     }
     return window.requestLocationWithConsent({
       title: '가족에게 이동을 공유할까요?',
       description: '현재 위치를 공유하면 가족이 지도에서 이동 경로와 목적지까지의 거리를 확인할 수 있어요.',
-      actionLabel: '위치 공유 시작'
+      actionLabel: '위치 공유 시작',
+      consentGiven
     }).then((position) => {
       const accuracy = position.coords.accuracy;
       if (!Number.isFinite(accuracy) || accuracy > MAX_START_ACCURACY_METERS) {
@@ -976,20 +977,91 @@
     }
   }
 
-  async function startTrip({ eventId = null, returnFor = null, title, destination = null, destinationText = '', mode }) {
+  let departureSelectionPending = false;
+
+  function selectDeparture({ title, destinationText, allowDestination }) {
+    return new Promise((resolve) => {
+      const previousFocus = document.activeElement;
+      const modal = document.createElement('div');
+      modal.className = 'modal-backdrop departure-backdrop';
+      modal.innerHTML = `
+        <section class="modal departure-modal" role="dialog" aria-modal="true" aria-labelledby="departure-title">
+          <button class="modal-close" type="button" aria-label="닫기"><span class="material-symbols-rounded">close</span></button>
+          <h2 id="departure-title">어떻게 이동할까요?</h2>
+          <p class="departure-destination">${escapeHtml(title || destinationText || '지금 출발하기')}</p>
+          <form class="departure-form">
+            ${allowDestination ? '<label class="modal-field">목적지 (선택)<input name="destination" maxlength="120" placeholder="장소명이나 주소" autocomplete="off"></label>' : ''}
+            <fieldset class="departure-modes"><legend>이동 수단 선택</legend>
+              ${[['walk', 'directions_walk', '도보'], ['car', 'directions_car', '자동차'], ['transit', 'directions_transit', '대중교통']].map(([mode, icon, label]) => `
+                <label><input type="radio" name="mode" value="${mode}" required><span class="material-symbols-rounded">${icon}</span><b>${label}</b></label>`).join('')}
+            </fieldset>
+            <p class="departure-privacy">출발하면 현재 위치를 가족에게 공유해요. 도착하거나 공유를 멈추면 종료돼요. 위치 권한이 필요하며, 목적지 위치를 찾지 못하면 도착은 직접 눌러 주세요.</p>
+            <button class="modal-action" type="submit" disabled>위치 공유하고 출발</button>
+          </form>
+        </section>`;
+      document.body.append(modal);
+      const form = modal.querySelector('form');
+      const close = (selection) => {
+        document.removeEventListener('keydown', onKeyDown);
+        modal.remove();
+        if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+        resolve(selection);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          close(null);
+        } else if (event.key === 'Tab') {
+          const controls = [...modal.querySelectorAll('button:not(:disabled), input')];
+          const first = controls[0];
+          const last = controls.at(-1);
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      };
+      document.addEventListener('keydown', onKeyDown);
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal || event.target.closest('.modal-close')) close(null);
+      });
+      form.addEventListener('change', () => {
+        form.querySelector('[type="submit"]').disabled = !form.querySelector('[name="mode"]:checked');
+      });
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const mode = form.querySelector('[name="mode"]:checked')?.value;
+        if (!['walk', 'car', 'transit'].includes(mode)) return;
+        close({ mode, destinationText: allowDestination ? form.elements.destination.value.trim() : destinationText });
+      });
+      modal.querySelector('.modal-close').focus();
+    });
+  }
+
+  async function startTrip({ eventId = null, returnFor = null, title, destination = null, destinationText = '', allowDestination = false }) {
     if (!isJoined()) {
       showToast('먼저 가족을 만들거나 초대 코드로 참여해 주세요.', 'info');
       showView('family');
       return;
     }
-    if (busy) return;
+    if (busy || departureSelectionPending) return;
+    departureSelectionPending = true;
+    let selection;
+    try {
+      selection = await selectDeparture({ title, destinationText, allowDestination });
+    } finally {
+      departureSelectionPending = false;
+    }
+    if (!selection) return;
+    destinationText = selection.destinationText;
     busy = true;
     renderFamilyView();
     try {
-      const profile = readJson('mapdule-profile', {});
-      const travelMode = mode || (['walk', 'transit', 'car'].includes(profile.transportMode) ? profile.transportMode : 'transit');
       const [position, place] = await Promise.all([
-        getPosition(),
+        getPosition(true),
         destination ? Promise.resolve(destination) : geocode(destinationText)
       ]);
       if (myTrip()?.status === 'moving') await endTrip('stopped', { silent: true });
@@ -1000,7 +1072,7 @@
           returnFor,
           title: title || destinationText || '이동 중',
           destination: place ? { ...place, name: destinationText || place.name } : null,
-          mode: travelMode,
+          mode: selection.mode,
           points: [toPoint(position)]
         }
       });
@@ -1049,8 +1121,11 @@
 
   async function startTripForEvent(eventId) {
     const event = typeof allEvents === 'function' ? allEvents().find((item) => item.id === eventId) : null;
-    if (!event) return;
-    const destination = event.place || (event.location ? await geocode(event.location) : null);
+    if (!event) {
+      showToast('일정을 찾을 수 없어요. 새로고침 후 다시 시도해 주세요.', 'info');
+      return;
+    }
+    const destination = event.place;
     await startTrip({
       eventId: event.source === 'family' ? event.id : null,
       title: event.title,
@@ -1571,15 +1646,15 @@
     const departures = todaysDepartures();
     const activity = readJson(ACTIVITY_KEY, []).slice(0, 6);
     const mapCard = section.querySelector('.family-map-card');
+    const moreOpen = section.querySelector('.family-more-panel')?.open ?? !window.matchMedia('(max-width:680px)').matches;
     section.dataset.mode = 'joined';
     section.innerHTML = `
       ${heading(state.family.name, `가족 ${members().length}명 · 서로의 일정과 이동을 함께 봐요`)}
       ${state.scheduleWarning ? `<p role="status">${escapeHtml(state.scheduleWarning)}</p>` : ''}
       ${pickupsHtml()}
-      ${todayBoardHtml()}
       <section class="family-share panel ${sharing ? 'is-sharing' : ''}">
         ${sharing ? `
-          <div class="share-live"><span class="live-dot"></span><b>내 위치 공유 중</b><small>${escapeHtml(mine.title)}${mine.destination && !mine.returnFor ? ` → ${escapeHtml(mine.destination.name)}` : ''}</small></div>
+          <div class="share-live"><span class="live-dot"></span><b>내 위치 공유 중</b><small>${escapeHtml(MODE_LABELS[mine.mode] || '이동')} · ${escapeHtml(mine.title)}${mine.destination && !mine.returnFor ? ` → ${escapeHtml(mine.destination.name)}` : ''}</small></div>
           ${estimate ? `<p class="share-eta">약 <b>${estimate.minutes}분</b> 남음 · ${formatClock(estimate.arrival)} 도착 예상${estimate.meters <= 1000 ? ` · 목적지까지 약 ${formatDistance(estimate.meters)}` : ''}${estimate.lateMinutes ? ` <em>${estimate.lateMinutes}분 늦을 수 있어요</em>` : ''}</p>` : '<p class="share-eta">목적지가 없어 도착은 직접 눌러 주세요.</p>'}
           ${watchersHtml()}
           <p class="share-note">${accuracyLabel} · ${tracking ? '화면을 켜 두면 위치가 더 정확하게 전달돼요.' : '이 기기에서 위치를 보내고 있지 않아요. 아래 버튼으로 다시 시작하세요.'}</p>
@@ -1588,17 +1663,20 @@
             <button type="button" class="trip-arrive-button" data-trip-arrive>도착했어요</button>
             <button type="button" class="trip-stop-button" data-trip-stop>공유 멈추기</button>
           </div>` : `
-          <h2><span class="material-symbols-rounded">near_me</span>나갈 때 '출발 알리기'</h2>
-          <p>도착할 때까지 가족이 내 이동 경로와 도착 예상 시간을 볼 수 있어요.</p>
+          <h2><span class="material-symbols-rounded">near_me</span>지금 출발하기</h2>
+          <p>이동 수단을 선택하고 가족에게 출발을 알려요.</p>
           ${departures.length ? `<div class="departure-list">${departures.map((event) => `
             <button type="button" class="departure-item" data-depart-event="${escapeHtml(event.id)}" ${busy ? 'disabled' : ''}>
               <time>${escapeHtml(event.startTime)}</time><span><b>${escapeHtml(event.title)}</b><small>${escapeHtml(event.location)}</small></span><em>출발</em>
             </button>`).join('')}</div>` : ''}
-          <button type="button" class="secondary-cta" data-free-depart ${busy ? 'disabled' : ''}><span class="material-symbols-rounded">add_location_alt</span>${departures.length ? '다른 곳으로 출발' : '지금 출발 알리기'}</button>`}
+          <button type="button" class="secondary-cta" data-free-depart ${busy ? 'disabled' : ''}><span class="material-symbols-rounded">add_location_alt</span>${departures.length ? '다른 곳으로 출발' : '지금 출발하기'}</button>`}
         <button type="button" class="link-button pickup-button" data-pickup ${busy ? 'disabled' : ''}><span class="material-symbols-rounded">hail</span>데리러 와 줘</button>
       </section>
+      ${todayBoardHtml()}
       <div class="family-chat-slot"></div>
       <div class="family-map-slot"></div>
+      <details class="family-more-panel" ${moreOpen ? 'open' : ''}>
+      <summary>가족 관리 · 알림 · 최근 소식</summary>
       <section class="family-members panel" aria-label="가족 구성원">
         <h2>가족 구성원</h2>
         ${members().map((member) => {
@@ -1618,6 +1696,7 @@
       <div class="family-footer">
         <button type="button" class="link-button danger" data-leave-family><span class="material-symbols-rounded">logout</span>가족에서 나가기</button>
       </div>
+      </details>
     `;
     window.MapDuleFamilyChat?.mount(section.querySelector('.family-chat-slot'), { api, familyId: state.family.id, me: me(), rooms: state.rooms || [{ key: 'family', kind: 'family', title: '가족방' }] });
     if (chatFocus?.isConnected) chatFocus.focus({ preventScroll: true });
@@ -1681,20 +1760,7 @@
   }
 
   function openFreeDeparture() {
-    showModal('어디로 출발하나요?', `
-      <form id="free-depart-form" class="profile-form">
-        <label class="modal-field">목적지<input name="destination" maxlength="120" placeholder="예: 강남역, 학교, 청주 할머니 댁" autocomplete="off"></label>
-        <label class="modal-field">이동 수단<select name="mode"><option value="transit">대중교통</option><option value="car">자동차</option><option value="walk">도보</option></select></label>
-        <p class="modal-note">목적지를 적으면 도착했을 때 자동으로 가족에게 알려요.</p>
-      </form>`, '출발 알리기', (modal) => {
-      const form = modal.querySelector('#free-depart-form');
-      const destination = form.elements.destination.value.trim();
-      startTrip({ title: destination ? `${destination}(으)로 이동` : '이동 중', destinationText: destination, mode: form.elements.mode.value });
-      return true;
-    });
-    const profile = readJson('mapdule-profile', {});
-    const select = document.querySelector('#free-depart-form [name="mode"]');
-    if (select && ['walk', 'transit', 'car'].includes(profile.transportMode)) select.value = profile.transportMode;
+    startTrip({ allowDestination: true });
   }
 
   document.addEventListener('submit', (event) => {
@@ -1896,11 +1962,13 @@
     if (!event || !canReturnFor(event)) return;
     const text = String(readJson('mapdule-profile', {}).home || '').trim();
     const saved = readJson(HOME_PLACE_KEY, null);
-    const place = text && saved?.query === text && Number.isFinite(saved.lat) && Number.isFinite(saved.lng)
-      ? saved : text ? await geocode(text) : null;
-    if (place) writeJson(HOME_PLACE_KEY, { query: text, lat: place.lat, lng: place.lng });
-    else showToast('프로필에 정확한 집 위치가 없어 자동 도착 확인 없이 공유해요.', 'info');
-    await startTrip({ returnFor: event.id, title: `${event.title} → 집`, destination: place ? { lat: place.lat, lng: place.lng, name: '집' } : null });
+    const place = text && saved?.query === text && Number.isFinite(saved.lat) && Number.isFinite(saved.lng) ? saved : null;
+    if (!text) showToast('프로필에 집 위치가 없어 도착은 직접 눌러 주세요.', 'info');
+    await startTrip({
+      returnFor: event.id, title: `${event.title} → 집`,
+      destination: place ? { lat: place.lat, lng: place.lng, name: '집' } : null,
+      destinationText: place ? '' : text
+    });
   }
 
   function watchersHtml() {
