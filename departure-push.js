@@ -35,12 +35,7 @@
     })();
     try { await cancelling; } finally { cancelling = null; }
   }
-  async function schedule(date, targets, events) {
-    if (!window.isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window)) return false;
-    const config = await request('status');
-    if (!config.enabled || Notification.permission !== 'granted') return false;
-    token();
-    if (cancelling) await cancelling;
+  async function currentSubscription(config, create = true) {
     const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
     await navigator.serviceWorker.ready;
     let subscription = await registration.pushManager.getSubscription();
@@ -48,10 +43,19 @@
     const oldKey = subscription?.options.applicationServerKey;
     if (oldKey && btoa(String.fromCharCode(...new Uint8Array(oldKey))) !== btoa(String.fromCharCode(...key))) {
       await cancel();
-      await subscription.unsubscribe();
+      if (!await subscription.unsubscribe()) throw new Error('이전 알림 연결을 해제하지 못했어요. 다시 시도해 주세요.');
       subscription = null;
     }
-    subscription ||= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    if (!subscription && create) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    return subscription;
+  }
+  async function schedule(date, targets, events) {
+    if (!window.isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+    const config = await request('status');
+    if (!config.enabled || Notification.permission !== 'granted') return false;
+    token();
+    if (cancelling) await cancelling;
+    const subscription = await currentSubscription(config);
     const now = Date.now();
     const items = targets.map((target) => ({
       id: `${date}-${target.toId}`, title: '출발할 시간이에요.',
@@ -76,5 +80,5 @@
       window.showToast?.('기존 푸시 예약 취소에 실패했어요. 연결 후 알림 끄기를 다시 눌러 주세요.', 'info');
     }
   }
-  window.MapDulePush = { schedule, cancel, reconcile, fingerprint };
+  window.MapDulePush = { schedule, cancel, reconcile, fingerprint, currentSubscription };
 })();

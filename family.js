@@ -330,6 +330,8 @@
   let pushConfig = null;
   let pushBusy = false;
   let pushSynced = false;
+  let pushSyncing = false;
+  let pushError = '';
   const HOME_PLACE_KEY = 'mapdule-home-place';
   const POLL_INTERVAL_MS = 60000;
   const POLL_ACTIVE_MS = 15000;
@@ -1466,28 +1468,28 @@
 
   async function loadPushConfig() {
     if (pushConfig) return pushConfig;
-    try {
-      const response = await fetch('/api/push/status', { signal: AbortSignal.timeout(8000) });
-      pushConfig = response.ok ? await response.json() : { enabled: false };
-    } catch {
-      return { enabled: false };
+    const response = await fetch('/api/push/status', { signal: AbortSignal.timeout(8000) });
+    if (!response.ok || !/^application\/json/i.test(response.headers.get('content-type') || '')) {
+      throw new Error('알림 서버 연결을 확인하지 못했어요. 다시 시도해 주세요.');
     }
-    return pushConfig;
-  }
-
-  function vapidBytes(key) {
-    const base64 = key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4);
-    return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const config = await response.json();
+    if (!config.enabled || !config.publicKey) throw new Error('알림 서버가 아직 준비되지 않았어요.');
+    pushConfig = config;
+    return config;
   }
 
   async function currentSubscription(config, create) {
-    const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
-    await navigator.serviceWorker.ready;
-    let subscription = await registration.pushManager.getSubscription();
-    if (!subscription && create) {
-      subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidBytes(config.publicKey) });
-    }
-    return subscription;
+    if (!window.MapDulePush) throw new Error('알림 기능을 불러오지 못했어요. 화면을 새로고침해 주세요.');
+    return window.MapDulePush.currentSubscription(config, create);
+  }
+
+  async function subscribeFamilyPush(config) {
+    const subscription = await currentSubscription(config, true);
+    const result = await api('push-subscribe', { body: { subscription: subscription.toJSON() } });
+    if (!result.subscribed || !result.delivery) throw new Error('서버의 가족 알림 발송이 준비되지 않았어요. 다시 시도해 주세요.');
+    writeJson(FAMILY_PUSH_KEY, { endpoint: subscription.endpoint });
+    pushSynced = true;
+    pushError = '';
   }
 
   async function enableFamilyPush() {
@@ -1495,17 +1497,18 @@
     pushBusy = true;
     renderFamilyView();
     try {
+      if (needsHomeScreen()) throw new Error("아이폰은 공유 버튼 → '홈 화면에 추가'로 설치한 앱에서 알림을 켜 주세요.");
+      if (!pushSupported()) throw new Error('이 브라우저는 닫힌 앱 알림을 지원하지 않아요. Chrome 또는 Edge에서 열어 주세요.');
+      // iOS requires the permission request to remain in the button's user gesture.
+      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('알림을 허용해야 받을 수 있어요. Chrome·Edge 또는 설치한 앱의 사이트 설정에서 알림을 허용해 주세요.');
       const config = await loadPushConfig();
-      if (!config.enabled) throw new Error('알림 서버가 아직 준비되지 않았어요.');
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') throw new Error('알림을 허용해야 받을 수 있어요. 브라우저 설정에서 알림을 허용해 주세요.');
-      const subscription = await currentSubscription(config, true);
-      await api('push-subscribe', { body: { subscription: subscription.toJSON() } });
-      writeJson(FAMILY_PUSH_KEY, { endpoint: subscription.endpoint });
-      pushSynced = true;
-      showToast('앱을 닫아도 가족 알림을 받아요.');
+      await subscribeFamilyPush(config);
+      showToast('서버에 가족 알림을 연결했어요. 기기 절전·네트워크 상태에 따라 늦거나 누락될 수 있어요.');
     } catch (error) {
-      showToast(error.message || '알림을 켜지 못했어요.', 'info');
+      pushSynced = false;
+      pushError = error.message || '알림을 켜지 못했어요.';
+      showToast(pushError, 'info');
     } finally {
       pushBusy = false;
       renderFamilyView();
@@ -1518,6 +1521,8 @@
     try {
       await api('push-unsubscribe', { body: {} });
       writeJson(FAMILY_PUSH_KEY, null);
+      pushSynced = false;
+      pushError = '';
       showToast('이 기기의 가족 알림을 껐어요.');
     } catch (error) {
       showToast(error.message || '알림을 끄지 못했어요.', 'info');
@@ -1529,16 +1534,19 @@
 
   // 구독 주소는 브라우저가 바꿀 수 있어서, 켜 둔 기기는 접속할 때 한 번 서버와 맞춘다.
   async function syncFamilyPush() {
-    if (pushSynced || !isJoined() || !readJson(FAMILY_PUSH_KEY, null) || !pushSupported() || Notification.permission !== 'granted') return;
-    pushSynced = true;
+    if (pushSynced || pushSyncing || pushBusy || !isJoined() || !readJson(FAMILY_PUSH_KEY, null) || !pushSupported() || Notification.permission !== 'granted') return;
+    pushSyncing = true;
     try {
       const config = await loadPushConfig();
-      if (!config.enabled) return;
-      const subscription = await currentSubscription(config, true);
-      await api('push-subscribe', { body: { subscription: subscription.toJSON() } });
-      writeJson(FAMILY_PUSH_KEY, { endpoint: subscription.endpoint });
-    } catch {
+      await subscribeFamilyPush(config);
+    } catch (error) {
       pushSynced = false;
+      const message = error.message || '가족 알림을 다시 연결하지 못했어요.';
+      if (pushError !== message) showToast(message, 'info');
+      pushError = message;
+    } finally {
+      pushSyncing = false;
+      renderFamilyView();
     }
   }
 
@@ -1617,7 +1625,8 @@
   }
 
   function familyPushHtml() {
-    const on = Boolean(readJson(FAMILY_PUSH_KEY, null)) && 'Notification' in window && Notification.permission === 'granted';
+    const saved = Boolean(readJson(FAMILY_PUSH_KEY, null));
+    const on = saved && pushSynced && 'Notification' in window && Notification.permission === 'granted';
     let detail;
     let action = '';
     if (!pushSupported()) {
@@ -1625,14 +1634,15 @@
     } else if (needsHomeScreen()) {
       detail = "아이폰은 공유 버튼 → '홈 화면에 추가'로 앱을 설치한 뒤 켤 수 있어요.";
     } else if (Notification.permission === 'denied') {
-      detail = '알림이 차단돼 있어요. 브라우저 설정에서 이 사이트의 알림을 허용해 주세요.';
+      detail = '알림이 차단돼 있어요. Chrome·Edge 또는 홈 화면에 설치한 앱에서 이 사이트의 알림을 허용해 주세요. VS Code 내장 브라우저 대신 실제 브라우저를 사용해 주세요.';
     } else if (on) {
       detail = '켜져 있어요 · 출발 시간, 아직 출발 안 함, 도착·귀가 소식이 와요.';
       action = `<button type="button" class="link-button" data-family-push-off ${pushBusy ? 'disabled' : ''}>이 기기에서 끄기</button>`;
     } else {
-      detail = '출발 시간, 아직 출발 안 함, 도착·귀가 소식을 앱을 닫아도 받아요.';
-      action = `<button type="button" class="secondary-cta" data-family-push-on ${pushBusy ? 'disabled' : ''}><span class="material-symbols-rounded">notifications_active</span>${pushBusy ? '켜는 중…' : '알림 켜기'}</button>`;
+      detail = pushError || (saved ? '이 기기의 가족 알림을 서버에 다시 연결하고 있어요.' : '출발 시간, 아직 출발 안 함, 도착·귀가 소식을 앱을 닫아도 받아요.');
+      action = `<button type="button" class="secondary-cta" data-family-push-on ${pushBusy || pushSyncing ? 'disabled' : ''}><span class="material-symbols-rounded">notifications_active</span>${pushBusy || pushSyncing ? '연결 중…' : saved || pushError ? '알림 다시 연결' : '알림 켜기'}</button>`;
     }
+    if (saved && !on) action += `<button type="button" class="link-button" data-family-push-off ${pushBusy || pushSyncing ? 'disabled' : ''}>이 기기에서 끄기</button>`;
     return `<section class="family-push panel ${on ? 'is-on' : ''}"><h2><span class="material-symbols-rounded">notifications</span>앱을 닫아도 알림 받기</h2><p>${escapeHtml(detail)}</p>${action}</section>`;
   }
 

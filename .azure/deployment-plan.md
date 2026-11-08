@@ -19,6 +19,11 @@ selection before every departure, improve location consent and feedback, test, c
 push and redeploy through the existing pipeline. Concurrent notification work is
 excluded from this commit; preserve those unstaged changes.
 
+Current follow-up (2026-11-08): deploy the remaining notification changes in
+departure-push.js and family.js with their six browser regression tests and related
+documentation. Exclude the historical patch and local handoff notes. Preserve all
+existing Azure resources, application settings and secrets.
+
 ## 2. Existing deployment
 
 - Repository: baekjungi/MapDule, branch main.
@@ -78,6 +83,25 @@ Do not claim successful Azure OpenAI inference unless it has actually been exerc
 Rollback, if needed, uses a normal revert commit after identifying the failed deployment; no destructive Git commands.
 
 ## 7. Validation Proof
+
+### 2026-11-08 notification follow-up
+
+Validation recorded at 2026-11-08T16:44:03+09:00 through azure-validate.
+
+- Focused notification/departure/family regression run: 36 tests passed.
+- `npm run check`: passed. `npm test`: 138 tests passed, zero failures.
+- `npm run build` and `git diff --check`: passed.
+- GitHub authentication and the existing deployment-token secret name verified.
+- Fetched main and local HEAD match before committing; normal push only.
+- Only notification browser scripts, their six regression tests, related deployment
+  documentation and validation records are included. Historical patch and handoff
+  notes remain untracked and are not shipped.
+- Existing CI validates the exact committed snapshot before uploading dist and api.
+- Static role verification: unchanged anonymous API routes, geolocation policy and
+  existing deployment identity. No IaC, Azure RBAC, resources or secret values change;
+  provisioning/subscription selection and live new-role checks are not applicable.
+- Production asset equality and matching pipeline completion must be verified after
+  push. Closed-app real-device delivery is not claimed by these automated checks.
 
 Validation date: 2026-11-05, approximately 22:02-22:05 Asia/Seoul.
 
