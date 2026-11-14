@@ -13,6 +13,7 @@ test('serves the app but blocks hidden files and repository metadata', async (co
   assert.equal(appResponse.status, 200);
   assert.equal(appResponse.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(appResponse.headers.get('x-frame-options'), 'DENY');
+  assert.equal(appResponse.headers.get('cross-origin-resource-policy'), 'same-origin');
   assert.match(appResponse.headers.get('content-security-policy'), /object-src 'none'/);
   assert.match(appResponse.headers.get('content-security-policy'), /upgrade-insecure-requests/);
   assert.match(appResponse.headers.get('content-security-policy'), /script-src 'self'/);
@@ -40,6 +41,39 @@ test('serves the app but blocks hidden files and repository metadata', async (co
 
   const methodResponse = await fetch(`${baseUrl}/`, { method: 'POST' });
   assert.equal(methodResponse.status, 405);
+});
+
+test('all local API groups reject cross-site browser traffic while permitting same-origin and direct clients', async (context) => {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  for (const fetchSite of ['cross-site', 'same-site']) {
+    for (const [route, method] of [
+      ['ai/status', 'GET'], ['ai/parse', 'POST'], ['ai/plan', 'POST'],
+      ['family/state', 'GET'], ['family/create', 'POST'],
+      ['mobility/status', 'GET'], ['mobility/search', 'POST'],
+      ['push/status', 'GET'], ['push/dispatch', 'POST']
+    ]) {
+      const response = await fetch(`${baseUrl}/api/${route}`, {
+        method, headers: { 'Sec-Fetch-Site': fetchSite, 'Content-Type': 'application/json' },
+        ...(method === 'POST' ? { body: '{}' } : {})
+      });
+      assert.equal(response.status, 403, `${method} ${route} (${fetchSite})`);
+      assert.equal((await response.json()).code, 'CROSS_SITE_REQUEST');
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+    }
+  }
+  for (const fetchSite of [null, 'same-origin', 'none']) {
+    const response = await fetch(`${baseUrl}/api/ai/status`, {
+      headers: fetchSite === null ? {} : { 'Sec-Fetch-Site': fetchSite }
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+  }
+  const unauthorized = await fetch(`${baseUrl}/api/family/state`, { headers: { 'Sec-Fetch-Site': 'same-origin' } });
+  assert.equal(unauthorized.status, 401, 'Fetch Metadata must not replace member authentication');
+  await unauthorized.json();
 });
 
 test('rejects malformed percent-encoding without crashing the server', async () => {

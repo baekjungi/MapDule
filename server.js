@@ -6,6 +6,7 @@ const { handleFamilyRequest } = require('./api/src/family-runtime');
 const { runAiRequest } = require('./api/src/ai-access');
 const { handleMobilityRequest } = require('./api/src/mobility');
 const { handleDeparturePushRequest, dispatchLocalDepartures } = require('./api/src/departure-push');
+const { browserRequestAllowed, CROSS_SITE_ERROR } = require('./api/src/request-security');
 
 const root = __dirname;
 const envFile = path.join(root, '.env');
@@ -18,7 +19,8 @@ const securityHeaders = {
   'Permissions-Policy': 'geolocation=(self), camera=(), microphone=()',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY'
+  'X-Frame-Options': 'DENY',
+  'Cross-Origin-Resource-Policy': 'same-origin'
 };
 
 function loadEnvironmentFile() {
@@ -192,6 +194,10 @@ const server = http.createServer(async (request, response) => {
   } catch {
     response.writeHead(400, securityHeaders);
     response.end('Bad request');
+    return;
+  }
+  if (requestUrl.pathname.startsWith('/api/') && !browserRequestAllowed(request.headers['sec-fetch-site'])) {
+    sendJson(response, 403, CROSS_SITE_ERROR);
     return;
   }
   if (requestUrl.pathname === '/api/ai/status' && request.method === 'GET') {

@@ -4,6 +4,14 @@ Status: Validated
 
 ## 1. Scope and approval
 
+Current request (2026-11-14): deploy the fixes implemented in this conversation:
+reliable departure-push retries and serialized browser reservations; cross-date
+calendar search; removal of redundant editor and mock recommendations; accessible
+data management; Fetch Metadata API guards and same-origin resource headers.
+The user's deployment request authorizes updating the existing main/site through
+the existing GitHub Actions pipeline. Exclude the historical patch and local
+handoff notes. Preserve Azure resources, application settings, identities and secrets.
+
 The user requested finding and fixing features that look available but do not work on 2026-11-05.
 The latest user request is to deploy the current application update on 2026-11-05.
 Update the existing application only. Preserve the existing design, family chat, Korean UI and server reliability fixes.
@@ -61,6 +69,15 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 
 ## 5. Validation
 
+### 2026-11-14 update
+
+- [x] Current JavaScript syntax, full regression suite and whitespace checks
+- [x] Public asset build and API dependency loading
+- [x] Existing main, workflow and deployment-secret presence
+- [x] Node.js 22 managed API runtime and CI compatibility
+- [x] Unchanged deployment identity and resource configuration
+- [x] Validation proof recorded before normal commit and push
+
 - [x] All validation checks pass
   - [x] JavaScript syntax: npm run check
   - [x] Full regression suite: npm test
@@ -83,6 +100,35 @@ Do not claim successful Azure OpenAI inference unless it has actually been exerc
 Rollback, if needed, uses a normal revert commit after identifying the failed deployment; no destructive Git commands.
 
 ## 7. Validation Proof
+
+### 2026-11-14 reliability, search and security update
+
+Validation executed at 2026-11-14T10:03:22+09:00 through azure-validate.
+
+- `npm run check`: passed.
+- `npm test`: 163 tests passed, zero failures.
+- `npm run build` and `git diff --check`: passed.
+- `@azure/functions` and `web-push` dependencies load successfully from api.
+- Local Node.js is 24.15.0. The deployed managed API is explicitly configured
+  for Node.js 22 and GitHub validation uses Node.js 22 before upload. Package
+  engine ranges include 22; no runtime major or dependency changes are introduced.
+- GitHub authentication, push permission and the existing app-specific deployment
+  secret name were verified without reading secret values. Local and remote main
+  both start from e27b03728f0e9982aea8001e0e164c174b58ca03.
+- Browser verification covered desktop and 320px mobile search, editing and
+  persistence, restoring the prior calendar view, category filters, data-management
+  navigation, explicit deletion confirmation and AI failure/manual-input fallback.
+- API tests cover cross-site/sibling-site rejection before body reads, same-origin
+  and non-browser callers, existing authentication, request limits and push dispatch.
+- Static identity review: no infrastructure, role assignments, deployment identities,
+  application settings or secrets are changed. Existing CI/CD upload token and
+  target remain unchanged. No provisioning or new-role checks are applicable.
+- Local Azure control-plane lookup could not authenticate. This code-only CI/CD
+  deployment uses the already-configured GitHub deployment token instead; live
+  public endpoint and exact asset verification are required after the matching run.
+- Historical patch and local handoff notes are excluded from staging and deployment.
+  Real-device closed-app notification delivery and new live AI inference are not
+  claimed by these deployment checks.
 
 ### 2026-11-08 notification follow-up
 

@@ -102,6 +102,20 @@ body.calendar-visible .calendar-sidebar{position:sticky;top:18px;min-height:calc
 .agenda-event-row:last-child{border-bottom:0}
 .agenda-event-row>time{color:#34384b;font-size:11px;font-weight:800}.agenda-event-row>time span{color:#8a8d9b;font-size:10px}
 .agenda-empty{display:grid;min-height:280px;place-items:center;color:#8a8d9b;font-size:12px}
+.calendar-search{display:flex;align-items:center;gap:8px;min-width:0;padding:5px 10px;border:1px solid #e2e4ed;border-radius:10px;background:#fff;color:#777b8d}
+.calendar-search:focus-within{border-color:var(--indigo);box-shadow:0 0 0 3px #4f46e522}
+.calendar-search input{flex:1;min-width:0;padding:8px 0;border:0;outline:0;background:transparent;color:var(--ink);font:inherit;font-size:14px}
+.calendar-search input::-webkit-search-cancel-button{appearance:none}
+.calendar-search button{display:grid;place-items:center;flex:none;width:32px;height:32px;border:0;border-radius:8px;background:#f0f1f8;color:#555a70;cursor:pointer}
+.calendar-search-status{margin:8px 2px 12px;color:#777b8d;font-size:12px}
+.calendar-search-status:empty{margin:0 0 12px}
+.agenda-event-row.calendar-search-result{grid-template-columns:92px minmax(0,1fr)}
+.calendar-search-result>div{min-width:0}
+.calendar-search-result .event-badge{width:100%}
+.calendar-search-result .event-badge-time{display:inline}
+.calendar-search-result p{margin:6px 0 0;color:#777b8d;font-size:12px;overflow-wrap:anywhere}
+.calendar-controls button:disabled,.view-select-label select:disabled{opacity:.45;cursor:default}
+.mobile-selected-day[hidden],.calendar-search button[hidden]{display:none}
 .sidebar-scrim{display:none}
 .event-modal-backdrop{position:fixed;z-index:100;inset:0;display:grid;place-items:center;padding:24px;background:#171a2c66;backdrop-filter:blur(4px);animation:event-fade-in .16s ease}
 .event-form-modal{width:min(100%,500px);max-height:min(760px,calc(100vh - 48px));overflow-y:auto;border:1px solid #ffffffb8;border-radius:20px;background:#fff;box-shadow:0 25px 75px #15172e36;animation:event-modal-in .2s ease}

@@ -2,6 +2,7 @@ const { app } = require('@azure/functions');
 const { getAiStatus, parseSchedulePrompt, analyzeSchedulePlan } = require('../ai-schedule');
 const { readLimitedBody } = require('../request-body');
 const { runAiRequest } = require('../ai-access');
+const { browserRequestAllowed, CROSS_SITE_ERROR } = require('../request-security');
 
 function jsonResponse(status, body, retryAfter = 60) {
   return new Response(JSON.stringify(body), {
@@ -9,12 +10,14 @@ function jsonResponse(status, body, retryAfter = 60) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
+      'Cross-Origin-Resource-Policy': 'same-origin',
       ...(status === 429 ? { 'Retry-After': String(retryAfter) } : {})
     }
   });
 }
 
 async function handleAiRequest(request, context, operation, label) {
+  if (!browserRequestAllowed(request.headers.get('sec-fetch-site'))) return jsonResponse(403, CROSS_SITE_ERROR);
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) {
     return jsonResponse(415, { error: '요청 Content-Type은 application/json이어야 합니다.' });
   }
@@ -46,7 +49,9 @@ app.http('ai-status', {
   methods: ['GET'],
   authLevel: 'anonymous',
   route: 'ai/status',
-  handler: async () => jsonResponse(200, { ...getAiStatus(), authRequired: false })
+  handler: async (request) => browserRequestAllowed(request.headers.get('sec-fetch-site'))
+    ? jsonResponse(200, { ...getAiStatus(), authRequired: false })
+    : jsonResponse(403, CROSS_SITE_ERROR)
 });
 
 app.http('ai-parse', {

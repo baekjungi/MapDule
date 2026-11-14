@@ -97,6 +97,12 @@ function createDeparturePushService({ store, send, now = () => Date.now() }) {
           if ([404, 410].includes(error.statusCode)) {
             await store.update(partition, row, (current) => current?.revision === record.revision
               ? { ...current, items: [], expiresAt: now(), revision: crypto.randomUUID() } : null);
+          } else {
+            console.warn('Departure push delivery failed; retrying while the reservation is valid.', { statusCode: error.statusCode });
+            await store.update(partition, row, (current) => {
+              if (current?.revision !== record.revision || claimed.expiresAt <= now()) return null;
+              return { ...current, items: [...current.items, { ...claimed, dueAt: now() + 60000 }] };
+            });
           }
         }
       }

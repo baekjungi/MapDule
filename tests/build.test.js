@@ -24,6 +24,23 @@ test('midpoint has an accessible entry and new styles preserve the font import',
   assert.match(familyStyles, /\.app-shell \.more-open \.top-secondary-actions\{display:grid/);
 });
 
+test('calendar search and data management replace the orphan editor and fake demo features', () => {
+  const root = path.resolve(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+  assert.match(html, /role="search" aria-label="일정 검색"/);
+  assert.match(html, /aria-describedby="calendar-search-status"/);
+  assert.match(html, /data-view="manual" aria-label="데이터 관리"/);
+  assert.doesNotMatch(html, /음성 분석 정확도|AI 실시간 분석 완료|accept-quest|add-dinner|keep-original/);
+  assert.doesNotMatch(app, /manual-event-form|manualEventForm|editingEventId/);
+  assert.match(styles, /\.calendar-search-result \.event-badge-time\{display:inline\}/);
+  assert.match(styles, /\.calendar-search input::-webkit-search-cancel-button\{appearance:none\}/);
+  for (const id of ['export-ics', 'export-backup', 'import-backup', 'clear-local-data', 'backup-file']) {
+    assert.ok(app.includes(`id="${id}"`), `Data management control missing: ${id}`);
+  }
+});
+
 test('keeps the family refresh control accessible at narrow mobile widths', () => {
   const projectRoot = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8');
@@ -79,4 +96,6 @@ test('Azure Static Web Apps allows guest AI access while preserving security hea
   const vercelConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'vercel.json'), 'utf8'));
   const vercelCsp = vercelConfig.headers[0].headers.find((header) => header.key === 'Content-Security-Policy');
   assert.match(vercelCsp?.value || '', /upgrade-insecure-requests/);
+  assert.equal(config.globalHeaders['Cross-Origin-Resource-Policy'], 'same-origin');
+  assert.equal(vercelConfig.headers[0].headers.find((header) => header.key === 'Cross-Origin-Resource-Policy')?.value, 'same-origin');
 });

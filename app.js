@@ -2,7 +2,6 @@ let views = [...document.querySelectorAll('.view')];
 let navItems = [...document.querySelectorAll('.nav-item')];
 const EVENTS_STORAGE_KEY = 'mapdule-events';
 const PROFILE_STORAGE_KEY = 'mapdule-profile';
-let editingEventId = null;
 let kakaoMap = null;
 let kakaoSdkReady = false;
 let kakaoSdkLoading = false;
@@ -10,6 +9,7 @@ let kakaoMapCreating = false;
 let currentLocationMarker = null;
 let displayedMonth = new Date();
 let calendarViewMode = 'month';
+let calendarSearchQuery = '';
 let analyzedScheduleEvents = [];
 let aiPromptRevision = 0;
 const topMoreButton = document.querySelector('.top-more-button');
@@ -243,8 +243,6 @@ function clearDemoContent() {
   document.querySelector('.ai-stack').innerHTML = `
     <div class="empty-state panel"><span class="material-symbols-rounded">event_note</span><h2>분석된 일정이 없습니다</h2><p>일정 문장을 입력해 주세요. AI 연동 후 구조화된 일정과 이동 시간을 이곳에서 확인할 수 있습니다.</p></div>
   `;
-  document.querySelector('.suggestion').hidden = true;
-  document.querySelector('.preview').hidden = true;
   const aiCta = document.querySelector('#ai .primary-cta');
   aiCta.disabled = true;
   aiCta.textContent = '분석된 일정이 없습니다';
@@ -258,22 +256,13 @@ function clearDemoContent() {
   manualView.setAttribute('aria-labelledby', 'manual-title');
   manualView.innerHTML = `
     <div class="section-heading">
-      <div class="section-icon indigo-bg"><span class="material-symbols-rounded">event</span></div>
-      <div><h1 id="manual-title">일정 직접 등록</h1><p>입력한 일정은 이 브라우저에 저장됩니다.</p></div>
+      <div class="section-icon indigo-bg"><span class="material-symbols-rounded">database</span></div>
+      <div><h1 id="manual-title">데이터 관리</h1><p>개인 일정과 프로필은 이 브라우저에 저장됩니다.</p></div>
+      <button class="round-close" type="button" data-view="today" aria-label="닫기"><span class="material-symbols-rounded">close</span></button>
     </div>
-    <form id="manual-event-form" class="manual-form panel">
-      <label class="form-field form-wide">일정 이름<input name="title" type="text" maxlength="80" placeholder="일정 이름" required></label>
-      <label class="form-field">날짜<input name="date" type="date" required></label>
-      <label class="form-field">분류<select name="category"><option>약속</option><option>업무</option><option>운동</option><option>개인</option><option>기타</option></select></label>
-      <label class="form-field">시작 시간<input name="startTime" type="time" required></label>
-      <label class="form-field">종료 시간<input name="endTime" type="time" required></label>
-      <label class="form-field form-wide">장소<input name="location" type="text" maxlength="120" placeholder="장소 (선택)"></label>
-      <label class="form-field form-wide">메모<textarea name="notes" rows="3" maxlength="300" placeholder="메모 (선택)"></textarea></label>
-      <button class="primary-cta form-wide" type="submit"><span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가</button>
-      <button class="secondary-cta form-wide cancel-edit hidden" type="button">수정 취소</button>
-    </form>
     <section class="calendar-tools panel" aria-label="캘린더 데이터 관리">
       <h2>캘린더 관리</h2>
+      <p class="modal-note">JSON 백업·복원은 개인 일정과 프로필만 포함합니다. 캘린더 파일에는 가족 일정도 포함됩니다. 이 기기의 데이터를 삭제해도 가족 공유 일정은 유지됩니다.</p>
       <div class="calendar-tool-actions">
         <button type="button" id="export-ics"><span class="material-symbols-rounded">calendar_month</span>캘린더 파일 내보내기</button>
         <button type="button" id="export-backup"><span class="material-symbols-rounded">download</span>JSON 백업</button>
@@ -1049,8 +1038,6 @@ function setSelectedDate(date, announce = false) {
   });
   renderCalendar();
   renderMonthCalendar();
-  const dateField = document.querySelector('#manual-event-form [name="date"]');
-  if (dateField) dateField.value = localDateString(selectedDate);
   if (announce) showToast(`${selectedDate.getMonth() + 1}월 ${selectedDate.getDate()}일 일정을 표시합니다.`);
 }
 
@@ -1502,6 +1489,49 @@ function renderAgendaView() {
   }).join('')}</div>`;
 }
 
+function searchCalendarEvents(query) {
+  const terms = query.trim().toLocaleLowerCase('ko-KR').split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  return allEvents().filter((item) => {
+    if (!visibleCalendars.has(calendarIdForEvent(item))) return false;
+    const text = [item.title, item.location, item.notes].join(' ').toLocaleLowerCase('ko-KR');
+    return terms.every((term) => text.includes(term));
+  }).sort((first, second) => `${first.date}${first.allDay ? '' : first.startTime}`
+    .localeCompare(`${second.date}${second.allDay ? '' : second.startTime}`));
+}
+
+function renderCalendarSearchResults(events) {
+  if (!events.length) return '<div class="agenda-empty">일치하는 일정이 없어요. 검색어나 캘린더 표시 설정을 확인해 주세요.</div>';
+  return `<div class="agenda-view">${events.map((item) => `
+    <article class="agenda-event-row calendar-search-result">
+      <time datetime="${escapeHtml(item.date)}">${escapeHtml(item.date)}</time>
+      <div>${renderEventBadge(item)}${item.location ? `<p>${escapeHtml(item.location)}</p>` : ''}</div>
+    </article>
+  `).join('')}</div>`;
+}
+
+function clearCalendarSearch() {
+  calendarSearchQuery = '';
+  const input = document.querySelector('#calendar-search');
+  if (input) input.value = '';
+  renderCalendarView();
+}
+
+document.querySelector('#calendar-search')?.addEventListener('input', (event) => {
+  calendarSearchQuery = event.currentTarget.value.trim();
+  renderCalendarView();
+});
+document.querySelector('#calendar-search')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    clearCalendarSearch();
+  }
+});
+document.querySelector('#clear-calendar-search')?.addEventListener('click', () => {
+  clearCalendarSearch();
+  document.querySelector('#calendar-search')?.focus();
+});
+
 function centerSelectedWeekDay(content) {
   const weekView = content.querySelector('.week-view');
   const heading = weekView?.querySelector(`.week-day-heading[data-select-date="${localDateString(selectedDate)}"]`);
@@ -1514,18 +1544,31 @@ function renderCalendarView() {
   const content = document.querySelector('.calendar-view-content');
   if (!content) return;
   const renderers = { month: renderMonthView, week: renderWeekView, day: renderDayView, agenda: renderAgendaView };
-  content.innerHTML = renderers[calendarViewMode]();
-  if (calendarViewMode === 'week') centerSelectedWeekDay(content);
+  const searching = Boolean(calendarSearchQuery);
+  const matches = searching ? searchCalendarEvents(calendarSearchQuery) : [];
+  content.innerHTML = searching ? renderCalendarSearchResults(matches) : renderers[calendarViewMode]();
+  if (!searching && calendarViewMode === 'week') centerSelectedWeekDay(content);
   renderMobileSelectedDay();
+  const mobilePanel = document.querySelector('.mobile-selected-day');
+  if (mobilePanel) mobilePanel.hidden = searching;
+  const status = document.querySelector('#calendar-search-status');
+  if (status) status.textContent = searching ? `전체 날짜 · 표시 중인 캘린더에서 ${matches.length}개를 찾았어요.` : '';
+  const clearButton = document.querySelector('#clear-calendar-search');
+  if (clearButton) clearButton.hidden = !document.querySelector('#calendar-search')?.value;
   const select = document.querySelector('.calendar-view-select');
-  if (select) select.value = calendarViewMode;
+  if (select) {
+    select.value = calendarViewMode;
+    select.disabled = searching;
+  }
   const title = document.querySelector('#calendar-title');
   const previousButton = document.querySelector('.main-month-prev');
   const nextButton = document.querySelector('.main-month-next');
   const periodLabel = calendarViewMode === 'week' ? '주' : calendarViewMode === 'day' ? '날짜' : '달';
   previousButton?.setAttribute('aria-label', `이전 ${periodLabel}`);
   nextButton?.setAttribute('aria-label', `다음 ${periodLabel}`);
-  if (title) title.textContent = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long' }).format(displayedMonth);
+  if (previousButton) previousButton.disabled = searching;
+  if (nextButton) nextButton.disabled = searching;
+  if (title) title.textContent = searching ? '일정 검색' : new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long' }).format(displayedMonth);
 }
 
 function renderMobileSelectedDay() {
@@ -1556,6 +1599,7 @@ function changeDisplayedMonth(offset) {
 }
 
 function navigateCalendar(offset) {
+  if (calendarSearchQuery) return;
   if (calendarViewMode === 'month' || calendarViewMode === 'agenda') {
     changeDisplayedMonth(offset);
     return;
@@ -1615,11 +1659,13 @@ document.querySelector('.calendar-view-select')?.addEventListener('change', (eve
   renderCalendarView();
 });
 document.querySelector('.calendar-today-button')?.addEventListener('click', () => {
+  clearCalendarSearch();
   const today = new Date();
   displayedMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   setSelectedDate(today);
 });
 document.querySelector('.sidebar-today-button')?.addEventListener('click', () => {
+  clearCalendarSearch();
   const today = new Date();
   displayedMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   setSelectedDate(today);
@@ -1635,6 +1681,7 @@ document.querySelector('.calendar-list')?.addEventListener('change', (event) => 
 document.querySelector('.mini-calendar-days')?.addEventListener('click', (event) => {
   const dayButton = event.target.closest('[data-mini-date]');
   if (!dayButton) return;
+  clearCalendarSearch();
   const [year, month, day] = dayButton.dataset.miniDate.split('-').map(Number);
   displayedMonth = new Date(year, month - 1, 1);
   setSelectedDate(new Date(year, month - 1, day, 12));
@@ -2080,70 +2127,10 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
     if (item) deleteEventWithConfirm(item);
   });
 
-  const manualEventForm = document.querySelector('#manual-event-form');
-  const endTimeInput = manualEventForm.elements.endTime;
-  [manualEventForm.elements.startTime, endTimeInput].forEach((input) => {
-    input.addEventListener('input', () => endTimeInput.setCustomValidity(''));
-  });
-  manualEventForm.elements.title.addEventListener('input', () => manualEventForm.elements.title.setCustomValidity(''));
-  manualEventForm.elements.date.value = localDateString(selectedDate);
   document.querySelector('.detail-add-event-button')?.addEventListener('click', () => openEventFormModal('create'));
   document.querySelector('.timeline')?.addEventListener('click', (event) => {
     if (event.target.closest('.add-event-button')) openEventFormModal('create');
   });
-  manualEventForm.querySelector('.cancel-edit').addEventListener('click', () => {
-    editingEventId = null;
-    manualEventForm.reset();
-    manualEventForm.elements.date.value = localDateString(selectedDate);
-    manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
-    manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
-  });
-
-  manualEventForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    manualEventForm.elements.title.setCustomValidity(manualEventForm.elements.title.value.trim() ? '' : '일정 제목을 입력해 주세요.');
-    if (!manualEventForm.reportValidity()) return;
-
-    const formData = new FormData(manualEventForm);
-    const startTime = String(formData.get('startTime'));
-    const endTime = String(formData.get('endTime'));
-    if (endTime <= startTime) {
-      endTimeInput.setCustomValidity('종료 시간은 시작 시간보다 늦어야 합니다.');
-      endTimeInput.reportValidity();
-      return;
-    }
-
-    const newEvent = {
-      id: editingEventId || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      title: String(formData.get('title')).trim(),
-      date: String(formData.get('date')),
-      startTime,
-      endTime,
-      category: String(formData.get('category')),
-      location: String(formData.get('location')).trim(),
-      notes: String(formData.get('notes')).trim()
-    };
-
-    const conflict = findTimeConflict(newEvent, editingEventId);
-    if (conflict && !confirm(`'${conflict.title}' 일정과 시간이 겹쳐요. 그래도 저장할까요?`)) return;
-
-    const events = loadSavedEvents();
-    const updatedEvents = editingEventId
-      ? events.map((item) => item.id === editingEventId ? newEvent : item)
-      : [...events, newEvent];
-    if (!saveEvents(updatedEvents)) return;
-
-    setSelectedDate(new Date(`${newEvent.date}T12:00:00`));
-    const wasEditing = Boolean(editingEventId);
-    editingEventId = null;
-    manualEventForm.reset();
-    manualEventForm.elements.date.value = newEvent.date;
-    manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
-    manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
-    showView('today');
-    showToast(wasEditing ? '일정을 수정했습니다.' : '일정을 캘린더에 추가했습니다.', 'success');
-  });
-
   setSelectedDate(selectedDate);
 
   document.querySelector('#export-ics').addEventListener('click', () => {
@@ -2231,11 +2218,6 @@ document.querySelector('.sidebar-scrim')?.addEventListener('click', () => docume
         showToast('저장 데이터를 삭제할 수 없습니다.', 'info');
         return false;
       }
-      editingEventId = null;
-      manualEventForm.reset();
-      manualEventForm.elements.date.value = localDateString(selectedDate);
-      manualEventForm.querySelector('[type="submit"]').innerHTML = '<span class="material-symbols-rounded">calendar_add_on</span>캘린더에 추가';
-      manualEventForm.querySelector('.cancel-edit').classList.add('hidden');
       renderProfileAvatar({});
       setSelectedDate(selectedDate);
       showToast('일정과 프로필을 삭제했습니다.');

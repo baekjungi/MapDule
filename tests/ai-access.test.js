@@ -66,7 +66,7 @@ function loadAiHandlers() {
 
 test('Functions status and both AI operations accept requests without identity or cookies', async () => {
   const { registrations, calls } = loadAiHandlers();
-  const status = await registrations.get('ai-status').handler();
+  const status = await registrations.get('ai-status').handler(new Request('https://app.example/api/ai/status'));
   assert.deepEqual(await status.json(), { configured: true, authRequired: false });
   for (const [route, body] of [['ai-parse', { prompt: '내일 회의' }], ['ai-plan', { events: [] }]]) {
     const options = registrations.get(route);

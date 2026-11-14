@@ -1,7 +1,12 @@
 (() => {
   const TOKEN_KEY = 'mapdule-push-token';
   const STATE_KEY = 'mapdule-push-state';
-  let cancelling = null;
+  let pendingOperation = Promise.resolve();
+  function serialize(operation) {
+    const result = pendingOperation.then(operation, operation);
+    pendingOperation = result;
+    return result;
+  }
   const fingerprint = (event) => window.departureEventFingerprint(event);
   const bytes = (key) => Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4)), (character) => character.charCodeAt(0));
   const readState = () => { try { return JSON.parse(localStorage.getItem(STATE_KEY) || 'null'); } catch { return null; } };
@@ -26,14 +31,10 @@
     return result;
   }
   async function cancel() {
-    if (cancelling) return cancelling;
     const state = readState();
     if (!state) return;
-    cancelling = (async () => {
-      await request('cancel', { endpoint: state.endpoint });
-      localStorage.removeItem(STATE_KEY);
-    })();
-    try { await cancelling; } finally { cancelling = null; }
+    await request('cancel', { endpoint: state.endpoint });
+    localStorage.removeItem(STATE_KEY);
   }
   async function currentSubscription(config, create = true) {
     const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
@@ -54,7 +55,6 @@
     const config = await request('status');
     if (!config.enabled || Notification.permission !== 'granted') return false;
     token();
-    if (cancelling) await cancelling;
     const subscription = await currentSubscription(config);
     const now = Date.now();
     const items = targets.map((target) => ({
@@ -66,8 +66,13 @@
     const referenced = new Set(targets.flatMap((target) => [target.fromId, target.toId]));
     const fingerprints = [...referenced].map((id) => [id, fingerprint(events.find((event) => event.id === id))]);
     if (readState()?.endpoint && readState().endpoint !== subscription.endpoint) await cancel();
-    localStorage.setItem(STATE_KEY, JSON.stringify({ endpoint: subscription.endpoint, fingerprints }));
+    const state = { endpoint: subscription.endpoint, fingerprints };
+    // A timeout can leave either reservation on the server, so track both until it confirms replacement.
+    const tracked = [...(readState()?.fingerprints || []), ...fingerprints];
+    const pending = { ...state, fingerprints: [...new Map(tracked.map((entry) => [JSON.stringify(entry), entry])).values()] };
+    localStorage.setItem(STATE_KEY, JSON.stringify(pending));
     await request('schedule', { subscription: subscription.toJSON(), items });
+    localStorage.setItem(STATE_KEY, JSON.stringify(state));
     return true;
   }
   async function reconcile(events) {
@@ -80,5 +85,11 @@
       window.showToast?.('기존 푸시 예약 취소에 실패했어요. 연결 후 알림 끄기를 다시 눌러 주세요.', 'info');
     }
   }
-  window.MapDulePush = { schedule, cancel, reconcile, fingerprint, currentSubscription };
+  window.MapDulePush = {
+    schedule: (...args) => serialize(() => schedule(...args)),
+    cancel: () => serialize(cancel),
+    reconcile: (events) => serialize(() => reconcile(events)),
+    fingerprint,
+    currentSubscription: (...args) => serialize(() => currentSubscription(...args))
+  };
 })();

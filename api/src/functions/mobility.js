@@ -1,6 +1,7 @@
 const { app } = require('@azure/functions');
 const { readLimitedBody } = require('../request-body');
 const { handleMobilityRequest } = require('../mobility');
+const { browserRequestAllowed, CROSS_SITE_ERROR } = require('../request-security');
 
 for (const action of ['status', 'search', 'nearby', 'midpoint']) {
   app.http(`mobility-${action}`, {
@@ -8,23 +9,30 @@ for (const action of ['status', 'search', 'nearby', 'midpoint']) {
     authLevel: 'anonymous',
     route: `mobility/${action}`,
     handler: async (request) => {
+      const headers = {
+        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+        'Cross-Origin-Resource-Policy': 'same-origin'
+      };
+      if (!browserRequestAllowed(request.headers.get('sec-fetch-site'))) {
+        return new Response(JSON.stringify(CROSS_SITE_ERROR), { status: 403, headers });
+      }
       let body = {};
       if (action !== 'status') {
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) {
-          return new Response(JSON.stringify({ error: '요청 Content-Type은 application/json이어야 합니다.' }), { status: 415, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+          return new Response(JSON.stringify({ error: '요청 Content-Type은 application/json이어야 합니다.' }), { status: 415, headers });
         }
         try {
           const { text, tooLarge } = await readLimitedBody(request);
-          if (tooLarge) return new Response(JSON.stringify({ error: '요청 본문이 너무 큽니다.' }), { status: 413, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+          if (tooLarge) return new Response(JSON.stringify({ error: '요청 본문이 너무 큽니다.' }), { status: 413, headers });
           body = JSON.parse(text);
         } catch {
-          return new Response(JSON.stringify({ error: '요청 본문은 올바른 JSON이어야 합니다.' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+          return new Response(JSON.stringify({ error: '요청 본문은 올바른 JSON이어야 합니다.' }), { status: 400, headers });
         }
       }
       const client = (request.headers.get('x-forwarded-for') || '').split(',').at(-1)?.trim() || 'unknown';
       const result = await handleMobilityRequest(action, body, client);
       return new Response(JSON.stringify(result.body), { status: result.status, headers: {
-        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+        ...headers,
         ...(result.status === 429 ? { 'Retry-After': String(result.retryAfter) } : {})
       } });
     }

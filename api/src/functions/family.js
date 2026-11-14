@@ -1,6 +1,7 @@
 const { app } = require('@azure/functions');
 const { handleFamilyRequest } = require('../family-runtime');
 const { readLimitedBody } = require('../request-body');
+const { browserRequestAllowed, CROSS_SITE_ERROR } = require('../request-security');
 
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
@@ -8,6 +9,7 @@ function jsonResponse(status, body) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
+      'Cross-Origin-Resource-Policy': 'same-origin',
       ...(status === 429 ? { 'Retry-After': '60' } : {})
     }
   });
@@ -23,6 +25,7 @@ app.http('family', {
   authLevel: 'anonymous',
   route: 'family/{action}',
   handler: async (request, context) => {
+    if (!browserRequestAllowed(request.headers.get('sec-fetch-site'))) return jsonResponse(403, CROSS_SITE_ERROR);
     let body = {};
     if (request.method === 'POST') {
       if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) {

@@ -1,12 +1,19 @@
 const { app } = require('@azure/functions');
 const { readLimitedBody } = require('../request-body');
 const { handleDeparturePushRequest } = require('../departure-push');
+const { browserRequestAllowed, CROSS_SITE_ERROR } = require('../request-security');
 
 for (const action of ['status', 'schedule', 'cancel', 'dispatch']) {
   app.http(`push-${action}`, {
     methods: [action === 'status' ? 'GET' : 'POST'], authLevel: 'anonymous', route: `push/${action}`,
     handler: async (request) => {
-      const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+      const headers = {
+        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+        'Cross-Origin-Resource-Policy': 'same-origin'
+      };
+      if (!browserRequestAllowed(request.headers.get('sec-fetch-site'))) {
+        return new Response(JSON.stringify(CROSS_SITE_ERROR), { status: 403, headers });
+      }
       let body = {};
       if (action !== 'status') {
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) {

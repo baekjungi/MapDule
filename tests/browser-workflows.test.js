@@ -49,6 +49,81 @@ test('calendar backups round-trip timed, all-day and leap-day events', () => {
   assert.equal(parseCalendarBackup(JSON.stringify({ format: 'mapdule-backup', events })).events.length, 2);
 });
 
+function calendarSearchHarness(events) {
+  const selectors = new Map();
+  const get = (selector) => {
+    if (!selectors.has(selector)) selectors.set(selector, { ...control(), focus() { this.focused = true; } });
+    return selectors.get(selector);
+  };
+  const visibleCalendars = new Set(['personal', 'family']);
+  const context = vm.createContext({
+    document: { querySelector: get }, allEvents: () => events, visibleCalendars,
+    calendarIdForEvent: (item) => item.calendarId || 'personal',
+    escapeHtml: vm.runInNewContext(`${section('function escapeHtml(', 'function renderProfileAvatar(')}; escapeHtml`),
+    renderEventBadge: (item) => `<button data-edit-event="${item.id}">${item.title.replace(/</g, '&lt;')}</button>`,
+    renderMonthView: () => 'month', renderWeekView: () => 'week',
+    renderDayView: () => 'day', renderAgendaView: () => 'agenda',
+    renderMobileSelectedDay() {}, centerSelectedWeekDay() {},
+    displayedMonth: new Date(2026, 10, 1)
+  });
+  vm.runInContext(`let calendarSearchQuery = ''; let calendarViewMode = 'week';
+    ${section('function searchCalendarEvents(', 'function centerSelectedWeekDay(')}
+    ${section('function renderCalendarView(', 'function renderMobileSelectedDay(')}`, context);
+  return { context, get, visibleCalendars };
+}
+
+test('calendar search finds title, location and memo across dates, applying every word and calendar filters', () => {
+  const events = [
+    savedEvent({ id: 'later', date: '2027-01-03', calendarId: 'personal', title: 'Design 회의', location: '서울역' }),
+    savedEvent({ id: 'earlier', date: '2025-01-03', calendarId: 'family', title: '약속', notes: '서울역 DESIGN 검토' }),
+    savedEvent({ id: 'hidden', calendarId: 'work', title: '서울역 design' }),
+    savedEvent({ id: 'partial', calendarId: 'personal', title: 'design' })
+  ];
+  const original = JSON.stringify(events);
+  const { context } = calendarSearchHarness(events);
+  assert.deepEqual(Array.from(context.searchCalendarEvents('  서울역  DeSiGn  '), (item) => item.id), ['earlier', 'later']);
+  assert.equal(context.searchCalendarEvents('없는 일정').length, 0);
+  assert.equal(context.searchCalendarEvents('   ').length, 0);
+  assert.equal(JSON.stringify(events), original);
+});
+
+test('calendar search sorts all-day events first and escapes result dates and locations', () => {
+  const { context } = calendarSearchHarness([
+    savedEvent({ id: 'timed', calendarId: 'personal', title: '회의', startTime: '09:00' }),
+    savedEvent({ id: 'all-day', calendarId: 'personal', title: '회의', allDay: true })
+  ]);
+  assert.deepEqual(Array.from(context.searchCalendarEvents('회의'), (item) => item.id), ['all-day', 'timed']);
+  const html = context.renderCalendarSearchResults([savedEvent({ date: '"><script>', location: '<img src=x onerror=alert(1)>' })]);
+  assert.doesNotMatch(html, /<script>|<img/);
+  assert.match(html, /&lt;img/);
+  assert.match(context.renderCalendarSearchResults([]), /캘린더 표시 설정/);
+});
+
+test('search shows editable results and Escape or clear restores the previous calendar view', () => {
+  const { get } = calendarSearchHarness([savedEvent({ calendarId: 'personal' })]);
+  const input = get('#calendar-search');
+  input.value = '회의';
+  input.emit('input', { currentTarget: input });
+  assert.match(get('.calendar-view-content').innerHTML, /data-edit-event="one"/);
+  assert.match(get('#calendar-search-status').textContent, /전체 날짜.*1개/);
+  assert.equal(get('.mobile-selected-day').hidden, true);
+  assert.equal(get('.calendar-view-select').disabled, true);
+  assert.equal(get('.main-month-next').disabled, true);
+  let prevented = false;
+  input.emit('keydown', { key: 'Escape', preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(input.value, '');
+  assert.equal(get('.calendar-view-content').innerHTML, 'week');
+  assert.equal(get('.mobile-selected-day').hidden, false);
+  assert.equal(get('.calendar-view-select').disabled, false);
+  assert.equal(get('.main-month-next').disabled, false);
+  input.value = '회의';
+  input.emit('input', { currentTarget: input });
+  get('#clear-calendar-search').emit('click');
+  assert.equal(input.value, '');
+  assert.equal(input.focused, true);
+});
+
 test('invalid backups fail as a whole instead of silently importing partial or broken events', () => {
   for (const changes of [
     { date: '2026-99-99' }, { date: '2026-02-29' }, { startTime: '25:00' },

@@ -18,6 +18,7 @@
     "Permissions-Policy": "geolocation=(self), camera=(), microphone=()",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY"
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Resource-Policy": "same-origin"
   }
 }

@@ -4,6 +4,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { readLimitedBody } = require('../api/src/request-body');
+const { browserRequestAllowed } = require('../api/src/request-security');
+
+test('browser API policy permits same-origin navigation and integrations, not sibling or unrelated sites', () => {
+  for (const value of [undefined, null, 'same-origin', 'none']) assert.equal(browserRequestAllowed(value), true);
+  for (const value of ['cross-site', 'same-site', '', 'invalid', 'same-origin, cross-site']) {
+    assert.equal(browserRequestAllowed(value), false);
+  }
+});
 
 test('body limits count UTF-8 bytes and accept exactly 16KiB but not one byte more', async () => {
   const limit = 16 * 1024;
@@ -31,6 +39,43 @@ function handlerFor(fileName, route) {
   }, { filename: file });
   return registrations.get(route).handler;
 }
+
+for (const [file, route, method] of [
+  ['ai.js', 'ai-status', 'GET'], ['ai.js', 'ai-parse', 'POST'], ['ai.js', 'ai-plan', 'POST'],
+  ['family.js', 'family', 'POST'], ['family.js', 'family', 'GET'],
+  ...['status', 'search', 'nearby', 'midpoint'].map((action) => ['mobility.js', `mobility-${action}`, action === 'status' ? 'GET' : 'POST']),
+  ...['status', 'schedule', 'cancel', 'dispatch'].map((action) => ['departure-push.js', `push-${action}`, action === 'status' ? 'GET' : 'POST'])
+]) {
+  test(`${route} ${method} blocks cross-site and sibling-site browser requests before reading the body`, async () => {
+    const handler = handlerFor(file, route);
+    for (const fetchSite of ['cross-site', 'same-site']) {
+      let reads = 0;
+      const request = {
+        method, headers: new Headers({ 'Content-Type': 'application/json', 'Sec-Fetch-Site': fetchSite }),
+        body: new ReadableStream({ pull() { reads += 1; } }, { highWaterMark: 0 })
+      };
+      const response = await handler(request, { error() {} });
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).code, 'CROSS_SITE_REQUEST');
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin');
+      assert.equal(reads, 0);
+    }
+  });
+}
+
+test('same-origin and non-browser status requests still work without authentication', async () => {
+  for (const [file, route] of [['ai.js', 'ai-status'], ['mobility.js', 'mobility-status'], ['departure-push.js', 'push-status']]) {
+    const handler = handlerFor(file, route);
+    for (const fetchSite of [null, 'same-origin', 'none']) {
+      const headers = new Headers();
+      if (fetchSite !== null) headers.set('Sec-Fetch-Site', fetchSite);
+      const response = await handler({ method: 'GET', headers });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin');
+    }
+  }
+});
 
 for (const [file, route] of [['ai.js', 'ai-parse'], ['family.js', 'family'], ['mobility.js', 'mobility-midpoint'], ['departure-push.js', 'push-schedule']]) {
   test(`${route} stops reading oversized chunked bodies at the size limit`, async () => {
