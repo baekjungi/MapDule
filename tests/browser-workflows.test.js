@@ -221,6 +221,75 @@ test('correcting either time or selecting all-day clears the previous blocking v
   assert.equal(title.validationMessage, '');
 });
 
+function eventFormMarkup(event = null, joined = false) {
+  const render = vm.runInNewContext(`${section('function openEventFormModal(', '  document.body.append(modal);')}
+    return modal.innerHTML;
+  }; openEventFormModal`, {
+    document: { querySelector: () => null, createElement: () => ({}) },
+    window: { MapDuleFamily: {
+      isJoined: () => joined, me: () => 'me',
+      members: () => [{ id: 'me', name: '나', color: '#123456' }]
+    } },
+    calendarIdForEvent: (item) => item.calendarId || 'personal',
+    calendarGroups: ['personal', 'work', 'family'].map((id) => ({ id, name: id })),
+    escapeHtml: vm.runInNewContext(`${section('function escapeHtml(', 'function renderProfileAvatar(')}; escapeHtml`),
+    localDateString: () => '2026-11-14', selectedDate: new Date(2026, 10, 14)
+  });
+  return render(event ? 'edit' : 'create', event);
+}
+
+test('new events expose essentials and keep optional settings collapsed without disabling their values', () => {
+  const html = eventFormMarkup(null, true);
+  const advanced = html.slice(html.indexOf('<details class="event-advanced"'), html.indexOf('</details>'));
+  assert.match(advanced, /^<details class="event-advanced" >\s*<summary>추가 설정/);
+  for (const name of ['title', 'date', 'startTime', 'endTime', 'location']) {
+    assert.ok(html.indexOf(`name="${name}"`) < html.indexOf('<details'), name);
+  }
+  for (const name of ['calendarId', 'notes', 'participants', 'repeatDays', 'departNotice', 'returnHome']) {
+    assert.ok(advanced.includes(`name="${name}"`), name);
+  }
+  assert.doesNotMatch(advanced, /\bdisabled\b/);
+  assert.match(advanced, /value="personal" selected/);
+  assert.match(advanced, /name="participants" value="me" checked/);
+});
+
+test('editing notes, custom calendars or family schedules opens optional settings and preserves saved values', () => {
+  for (const event of [
+    savedEvent({ calendarId: 'personal', notes: '<중요 메모>' }),
+    savedEvent({ calendarId: 'personal', description: '이전 메모' }),
+    savedEvent(),
+    savedEvent({ calendarId: 'family', participants: ['me'], repeatDays: [1, 3], departNotice: 20, returnHome: true })
+  ]) {
+    const html = eventFormMarkup(event, true);
+    assert.match(html, /<details class="event-advanced" open>/);
+    assert.ok(html.includes(`value="${event.calendarId}" selected`));
+    if (event.notes) assert.match(html, /&lt;중요 메모&gt;/);
+    if (event.description) assert.match(html, /이전 메모/);
+    if (event.calendarId === 'family') {
+      assert.match(html, /name="participants" value="me" checked/);
+      assert.match(html, /name="repeatDays" value="1" checked/);
+      assert.match(html, /value="20" selected/);
+      assert.match(html, /name="returnHome" checked/);
+    }
+  }
+  assert.match(eventFormMarkup(savedEvent({ calendarId: 'personal', notes: '' })), /<details class="event-advanced" >/);
+});
+
+test('validation opens collapsed optional settings so the invalid control can receive focus', () => {
+  let handler;
+  vm.runInNewContext(section("  form.addEventListener('invalid'", '  const titleInput'), {
+    form: { addEventListener(type, callback, capture) {
+      assert.equal(type, 'invalid');
+      assert.equal(capture, true);
+      handler = callback;
+    } }
+  });
+  const details = { open: false };
+  handler({ target: { closest: () => details } });
+  assert.equal(details.open, true);
+  handler({ target: { closest: () => null } });
+});
+
 test('editing an in-flight place query permits a new search and ignores the obsolete result', async () => {
   const input = control('강남역');
   const button = control();
@@ -315,9 +384,13 @@ test('editing an already analyzed prompt disables registration and removes the o
   await pending;
   assert.equal(harness.eventCount(), 1);
   assert.equal(harness.get('#ai .primary-cta').disabled, false);
+  assert.equal(harness.get('#ai .primary-cta').hidden, false);
+  assert.equal(harness.get('.ai-preview').hidden, false);
   harness.get('#schedule-prompt').emit('input');
   assert.equal(harness.eventCount(), 0);
   assert.equal(harness.get('#ai .primary-cta').disabled, true);
+  assert.equal(harness.get('#ai .primary-cta').hidden, true);
+  assert.equal(harness.get('.ai-preview').hidden, true);
   assert.doesNotMatch(harness.get('.ai-stack').innerHTML, /ai-preview-event/);
 });
 
@@ -332,4 +405,53 @@ test('an AI response for an edited prompt cannot re-enable stale registration', 
   assert.equal(harness.eventCount(), 0);
   assert.equal(harness.get('#ai .primary-cta').disabled, true);
   assert.equal(harness.get('#analyze-prompt').disabled, false);
+  assert.equal(harness.get('.ai-preview').hidden, true);
+});
+
+test('AI previews stay hidden while typing, then show loading and actionable failures', async () => {
+  const harness = aiHarness();
+  harness.get('#schedule-prompt').value = '회의';
+  harness.get('#schedule-prompt').emit('input');
+  assert.equal(harness.get('.ai-preview').hidden, true);
+  assert.equal(harness.get('.ai-stack').innerHTML, '');
+  const pending = harness.analyze();
+  assert.equal(harness.get('.ai-preview').hidden, false);
+  assert.match(harness.get('.ai-stack').innerHTML, /일정을 분석하고 있어요/);
+  harness.complete({ events: [] });
+  await pending;
+  assert.equal(harness.get('.ai-preview').hidden, false);
+  assert.equal(harness.get('#ai .primary-cta').disabled, true);
+  assert.equal(harness.get('#ai .primary-cta').hidden, true);
+  assert.match(harness.get('.ai-stack').innerHTML, /일정을 분석하지 못했어요/);
+});
+
+function familyOnboardingMarkup({ open = false, available = true, code = '' } = {}) {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'family.js'), 'utf8');
+  const section = { querySelector: () => ({ open }) };
+  vm.runInNewContext(`${script.slice(script.indexOf('  function heading('), script.indexOf('  function memberStatus('))}
+    renderOnboarding(section);`, {
+    section, serverStatus: { available }, busy: false, pendingJoinCode: code,
+    readJson: () => ({ name: '<이름>' }),
+    escapeHtml: vm.runInNewContext(`${source.slice(source.indexOf('function escapeHtml('), source.indexOf('function renderProfileAvatar('))}; escapeHtml`)
+  });
+  return section.innerHTML;
+}
+
+test('family onboarding prioritizes joining and keeps creation and legacy invite codes available', () => {
+  const html = familyOnboardingMarkup({ code: 'ABC1234567' });
+  assert.match(html, /<details class="family-create-panel" >/);
+  assert.ok(html.indexOf('id="family-join-form"') < html.indexOf('<details'));
+  const creation = html.slice(html.indexOf('<details'), html.indexOf('</details>'));
+  assert.match(creation, /id="family-create-form" aria-labelledby="family-create-title"/);
+  assert.match(creation, /name="memberName"[^>]+required/);
+  assert.match(html, /name="inviteCode" maxlength="10" value="ABC1234567"/);
+  assert.match(html, /value="&lt;이름&gt;"/);
+  assert.match(html, /언제든 공유를 멈출 수 있어요/);
+});
+
+test('family creation stays expanded across rerenders and unavailable servers still disable both actions', () => {
+  assert.match(familyOnboardingMarkup({ open: true }), /<details class="family-create-panel" open>/);
+  const html = familyOnboardingMarkup({ available: false });
+  assert.equal((html.match(/type="submit" disabled/g) || []).length, 2);
+  assert.match(html, /가족 공유 서버가 아직 준비되지 않았어요/);
 });

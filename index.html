@@ -28,7 +28,6 @@
         <button class="icon-button top-more-button" type="button" aria-label="더보기" aria-expanded="false" aria-controls="top-secondary-actions"><span class="material-symbols-rounded">more_horiz</span></button>
         <div id="top-secondary-actions" class="top-secondary-actions">
           <span class="status-pill"><i></i>위치 미확인</span>
-          <button class="icon-button" type="button" data-view="midpoint" aria-label="약속 지점 찾기" title="약속 지점 찾기"><span class="material-symbols-rounded">hub</span><span class="top-action-label">약속 지점 찾기</span></button>
           <button class="icon-button" type="button" aria-label="알림"><span class="material-symbols-rounded">notifications</span><span class="top-action-label">알림</span></button>
           <button class="icon-button" type="button" data-view="manual" aria-label="데이터 관리" title="데이터 관리"><span class="material-symbols-rounded">database</span><span class="top-action-label">데이터 관리</span></button>
         </div>
@@ -48,7 +47,6 @@
             <h2>내 캘린더</h2>
             <div class="calendar-list"></div>
           </section>
-          <button class="sidebar-today-button" type="button"><span class="material-symbols-rounded">today</span>오늘로 이동</button>
         </aside>
         <div class="sidebar-scrim"></div>
         <section class="calendar-main" aria-label="일정 캘린더">
@@ -97,13 +95,13 @@
     <section id="ai" class="view" aria-labelledby="ai-title">
       <div class="section-heading"><div class="section-icon indigo-bg"><span class="material-symbols-rounded">auto_awesome</span></div><div><h1 id="ai-title">AI 일정 등록</h1><p>문장으로 입력하고 분석 결과를 확인한 뒤 저장하세요.</p></div><button class="round-close" type="button" data-view="today" aria-label="닫기"><span class="material-symbols-rounded">close</span></button></div>
       <div class="prompt-card panel"></div>
-      <div class="section-title"><h2><span class="material-symbols-rounded">event_note</span>일정 미리보기</h2><small>일정 분석 후 표시됩니다</small></div>
-      <div class="ai-stack"></div>
-      <button class="primary-cta" type="button" disabled>분석된 일정이 없습니다</button>
-      <button class="manual-link" type="button">오늘 화면으로 돌아가기</button>
+      <section class="ai-preview" aria-labelledby="ai-preview-title" hidden>
+        <div class="section-title"><h2 id="ai-preview-title"><span class="material-symbols-rounded">event_note</span>일정 미리보기</h2><small>일정 분석 후 표시됩니다</small></div>
+        <div class="ai-stack"></div>
+        <button class="primary-cta" type="button" disabled hidden>분석된 일정이 없습니다</button>
+      </section>
+      <button class="manual-link" type="button" data-manual-fallback>직접 입력으로 등록</button>
     </section>
-
-    <section id="midpoint" class="view compact-view" aria-labelledby="midpoint-title"><div class="section-heading"><div class="section-icon cyan-bg"><span class="material-symbols-rounded">hub</span></div><div><h1 id="midpoint-title">약속 지점 찾기</h1><p>모두에게 공평한 중간역을 찾아요</p></div></div><div class="midpoint-hero panel"><div class="orb"><span class="material-symbols-rounded">groups</span></div><h2>친구들의 출발 위치를<br>입력해 주세요</h2><p>이동 시간이 가장 균등한 장소와<br>주변 카페를 추천해 드립니다.</p><button class="primary-cta">출발 위치 추가하기 <span class="material-symbols-rounded">add</span></button></div><div class="demo-result panel"><div class="card-meta"><span class="tag mint">최적의 장소</span><span>3명 기준</span></div><h2>서울숲역</h2><p>평균 이동 26분 · 최대 편차 4분</p><div class="people-times"><span>민수 <b>24분</b></span><span>지영 <b>26분</b></span><span>나 <b>28분</b></span></div><button class="secondary-cta">주변 카페 12곳 보기 <span class="material-symbols-rounded">arrow_forward</span></button></div></section>
 
     <section id="family" class="view compact-view" aria-labelledby="family-title"></section>
 

@@ -1392,23 +1392,26 @@
     const profile = readJson('mapdule-profile', {});
     const name = escapeHtml(profile.name || '');
     const unavailable = serverStatus && !serverStatus.available;
+    const createOpen = section.querySelector('.family-create-panel')?.open ?? false;
     section.innerHTML = `
       ${heading('우리 가족', '가족 일정을 함께 보고, 이동할 때 위치를 공유해요')}
       ${unavailable ? `<div class="family-notice panel"><span class="material-symbols-rounded">cloud_off</span><div><b>${serverStatus.offline ? '서버에 연결할 수 없어요' : '가족 공유 서버가 아직 준비되지 않았어요'}</b><small>${serverStatus.offline ? '인터넷 연결을 확인해 주세요.' : '관리자가 저장소 연결 설정(DEPLOYMENT.md)을 마치면 사용할 수 있어요.'}</small></div></div>` : ''}
       <form class="family-card panel" id="family-join-form">
         <h2><span class="material-symbols-rounded">group_add</span>초대 코드로 참여하기</h2>
-        <p>새 초대 코드는 6자리예요. 기존 10자리 코드도 사용할 수 있어요.</p>
+        <p>가족에게 받은 초대 코드를 입력하세요.</p>
         <label class="modal-field">내 이름<input name="memberName" maxlength="20" value="${name}" placeholder="예: 엄마, 준기" required></label>
         <label class="modal-field">초대 코드<input name="inviteCode" maxlength="10" value="${escapeHtml(pendingJoinCode)}" placeholder="예: K7M2QX" autocapitalize="characters" autocomplete="off" required class="invite-input"></label>
         <button class="primary-cta" type="submit" ${busy || unavailable ? 'disabled' : ''}>가족에 참여하기</button>
       </form>
-      <form class="family-card panel" id="family-create-form">
-        <h2><span class="material-symbols-rounded">home</span>새 가족 만들기</h2>
+      <details class="family-create-panel" ${createOpen ? 'open' : ''}>
+        <summary id="family-create-title">초대 코드가 없나요? 새 가족 만들기</summary>
+      <form class="family-card panel" id="family-create-form" aria-labelledby="family-create-title">
         <p>가족을 만들면 초대 링크를 보낼 수 있어요.</p>
         <label class="modal-field">가족 이름<input name="familyName" maxlength="30" placeholder="예: 백씨네 가족"></label>
         <label class="modal-field">내 이름<input name="memberName" maxlength="20" value="${name}" placeholder="예: 아빠" required></label>
         <button class="secondary-cta" type="submit" ${busy || unavailable ? 'disabled' : ''}>가족 만들기</button>
       </form>
+      </details>
       <p class="family-privacy"><span class="material-symbols-rounded">lock</span>위치는 '출발 알리기'를 누른 뒤 도착할 때까지만 가족에게 보여요. 언제든 공유를 멈출 수 있어요.</p>
     `;
   }
@@ -1656,7 +1659,7 @@
     const departures = todaysDepartures();
     const activity = readJson(ACTIVITY_KEY, []).slice(0, 6);
     const mapCard = section.querySelector('.family-map-card');
-    const moreOpen = section.querySelector('.family-more-panel')?.open ?? !window.matchMedia('(max-width:680px)').matches;
+    const moreOpen = section.querySelector('.family-more-panel')?.open ?? false;
     section.dataset.mode = 'joined';
     section.innerHTML = `
       ${heading(state.family.name, `가족 ${members().length}명 · 서로의 일정과 이동을 함께 봐요`)}

@@ -272,12 +272,16 @@ body.calendar-visible .calendar-today-button,body.calendar-visible .view-select-
 }
 .family-more-panel{margin-top:14px}
 .family-more-panel>summary{padding:16px 12px;margin-bottom:12px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--muted);font-size:13px;font-weight:700;cursor:pointer}
+.family-create-panel{margin:14px 0}
+.family-create-panel>summary{padding:16px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--family-dark);font-size:13px;font-weight:700;cursor:pointer}
+.family-create-panel>summary:focus-visible{outline:2px solid var(--family-dark);outline-offset:2px}
 @media(max-width:680px){
 .app-shell .topbar{height:68px;min-height:68px;flex-wrap:nowrap;gap:8px;padding:8px 0}
 .app-shell .top-actions{position:relative;width:auto;margin-left:auto;gap:4px;justify-content:flex-end}
 .app-shell .top-actions .family-header-button,.brand>span:last-child small{display:none}
 .app-shell .top-actions .calendar-menu-button,.app-shell .top-actions .ai-register-button,.app-shell .top-actions .top-more-button,.app-shell .top-actions .avatar{width:44px;height:44px;min-width:44px;padding:0;margin:0;place-items:center}
-.app-shell .top-actions .ai-register-button,.app-shell .top-actions .top-more-button{display:grid}
+.app-shell .top-actions .top-more-button{display:grid}
+.app-shell .top-actions .ai-register-button{display:none}
 .app-shell .top-actions .ai-register-button>span:not(.material-symbols-rounded){display:none}
 .app-shell .top-secondary-actions{display:none;position:absolute;top:52px;right:0;z-index:50;min-width:210px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 8px 24px #20243a22}
 .app-shell .more-open .top-secondary-actions{display:grid;gap:6px}

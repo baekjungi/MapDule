@@ -234,7 +234,7 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, result.status, result.body, result.retryAfter);
     return;
   }
-  const mobilityMatch = requestUrl.pathname.match(/^\/api\/mobility\/(status|search|nearby|midpoint)$/);
+  const mobilityMatch = requestUrl.pathname.match(/^\/api\/mobility\/(status|search)$/);
   if (mobilityMatch && request.method === (mobilityMatch[1] === 'status' ? 'GET' : 'POST')) {
     let body = {};
     if (request.method === 'POST') {

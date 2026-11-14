@@ -228,27 +228,26 @@ function clearDemoContent() {
   document.querySelector('.prompt-card').innerHTML = `
     <div class="card-meta"><label class="eyebrow" for="schedule-prompt">일정 문장 입력</label><span id="azure-ai-status" class="tag slate">AI 설정 확인 중</span></div>
     <textarea id="schedule-prompt" class="prompt-input" rows="4" maxlength="4000" placeholder="예: 내일 오후 3시에 강남역에서 민수 만나고 저녁 7시에 집에서 운동할 거야"></textarea>
-    <div class="prompt-actions"><span class="voice-pill"><span class="material-symbols-rounded">info</span>분석 결과를 확인한 뒤 캘린더에 등록합니다</span><button class="link-button" id="analyze-prompt" type="button"><span class="material-symbols-rounded">auto_awesome</span>AI로 일정 분석</button></div>
+    <div class="prompt-actions"><button class="link-button" id="analyze-prompt" type="button"><span class="material-symbols-rounded">auto_awesome</span>일정 분석</button></div>
     <p id="ai-analysis-message" class="ai-analysis-message" role="status" aria-live="polite"></p>
   `;
-  document.querySelector('.prompt-card').insertAdjacentHTML('afterend', `
+  document.querySelector('#ai .manual-link').insertAdjacentHTML('afterend', `
+    <details class="ai-plan-tools">
+      <summary>저장된 일정의 이동 시간 계산</summary>
     <section class="ai-plan-launch panel">
-      <div><h2><span class="material-symbols-rounded">calculate</span>저장된 일정 계산</h2><p>선택한 날짜의 일정 간격, 위치 기반 이동 예상과 휴식 여유를 분석합니다.</p></div>
+      <div><h2><span class="material-symbols-rounded">calculate</span>이동 시간 계산</h2><p>달력에서 선택한 날짜의 이동 시간과 일정 사이 여유를 확인해요.</p></div>
       <button id="analyze-day-plan" type="button"><span class="material-symbols-rounded">auto_awesome</span>일정 계산</button>
     </section>
     <section id="ai-plan-result" class="ai-plan-result panel" role="status" aria-live="polite" hidden></section>
+    </details>
   `);
   document.querySelector('#analyze-day-plan')?.addEventListener('click', analyzeSelectedDayPlan);
   document.querySelector('.section-title small').textContent = '일정 분석 후 표시됩니다';
-  document.querySelector('.ai-stack').innerHTML = `
-    <div class="empty-state panel"><span class="material-symbols-rounded">event_note</span><h2>분석된 일정이 없습니다</h2><p>일정 문장을 입력해 주세요. AI 연동 후 구조화된 일정과 이동 시간을 이곳에서 확인할 수 있습니다.</p></div>
-  `;
+  document.querySelector('.ai-stack').innerHTML = '';
   const aiCta = document.querySelector('#ai .primary-cta');
   aiCta.disabled = true;
   aiCta.textContent = '분석된 일정이 없습니다';
-  document.querySelector('.manual-link').textContent = '오늘 화면으로 돌아가기';
-
-  initializeMidpoint();
+  document.querySelector('.manual-link').textContent = '직접 입력으로 등록';
 
   const manualView = document.createElement('section');
   manualView.id = 'manual';
@@ -281,128 +280,6 @@ function clearDemoContent() {
 }
 
 let weekDates = clearDemoContent();
-
-async function requestMobility(action, body) {
-  const response = await fetchWithTimeout(`/api/mobility/${action}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  });
-  if (!/^application\/json/i.test(response.headers.get('content-type') || '')) throw new Error('이동 서버 응답을 확인하지 못했어요.');
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '이동 요청에 실패했어요.');
-  return result;
-}
-
-function initializeMidpoint() {
-  const section = document.querySelector('#midpoint');
-  section.innerHTML = `
-    <div class="section-heading"><div class="section-icon green-bg"><span class="material-symbols-rounded">groups</span></div><div><h1 id="midpoint-title">약속 지점</h1><p>비교한 후보 중 이동 시간 차이가 작은 순서</p></div></div>
-    <form id="midpoint-form" class="midpoint-form">
-      <div class="midpoint-settings"><label class="form-field">이동 수단<select name="mode"><option value="transit">대중교통</option><option value="walk">도보</option><option value="car">자동차</option></select></label><label class="form-field">장소 종류<select name="category"><option value="cafe">카페</option><option value="restaurant">식당</option><option value="station">지하철역</option></select></label></div>
-      <div class="midpoint-heading"><h2>참가자 출발지</h2><button type="button" data-add="participant" title="참가자 추가" aria-label="참가자 추가"><span class="material-symbols-rounded">person_add</span></button></div>
-      <div id="midpoint-participants"></div>
-      <div class="midpoint-heading"><h2>후보 장소</h2><div><button type="button" id="midpoint-nearby"><span class="material-symbols-rounded">near_me</span>주변 후보</button><button type="button" data-add="candidate" title="후보 추가" aria-label="후보 추가"><span class="material-symbols-rounded">add_location_alt</span></button></div></div>
-      <div id="midpoint-candidates"></div>
-      <button type="submit" class="primary-cta"><span class="material-symbols-rounded">route</span>이동 시간 비교</button>
-    </form>
-    <p id="midpoint-status" role="status" aria-live="polite"></p><div id="midpoint-results"></div>`;
-  const form = section.querySelector('form');
-  const status = section.querySelector('#midpoint-status');
-  const results = section.querySelector('#midpoint-results');
-  const participants = section.querySelector('#midpoint-participants');
-  const candidates = section.querySelector('#midpoint-candidates');
-  let compared = [];
-  let busy = false;
-  const invalidate = () => { compared = []; results.replaceChildren(); status.textContent = ''; };
-  const limits = () => form.querySelectorAll('[data-add]').forEach((button) => {
-    button.disabled = busy || (button.dataset.add === 'participant' ? participants.children.length >= 6 : candidates.children.length >= 5);
-  });
-  const addRow = (type, seed = null) => {
-    const container = type === 'participant' ? participants : candidates;
-    if (container.children.length >= (type === 'participant' ? 6 : 5)) return;
-    const row = document.createElement('fieldset');
-    row.className = 'midpoint-place';
-    row.innerHTML = `<legend>${type === 'participant' ? '참가자' : '후보'}</legend>
-      ${type === 'participant' ? '<label class="form-field">이름<input data-name maxlength="80" required placeholder="이름"></label>' : ''}
-      <label class="form-field">${type === 'participant' ? '출발 장소' : '장소'}<div class="midpoint-search"><input data-query maxlength="120" required placeholder="장소명 또는 주소"><button type="button" data-search title="장소 검색" aria-label="장소 검색"><span class="material-symbols-rounded">search</span></button><button type="button" data-remove title="삭제" aria-label="삭제"><span class="material-symbols-rounded">close</span></button></div></label>
-      <div data-search-results class="midpoint-search-results"></div>
-      <details><summary>위도·경도</summary><div class="midpoint-coordinates"><label class="form-field">위도<input data-lat type="number" min="-90" max="90" step="any"></label><label class="form-field">경도<input data-lng type="number" min="-180" max="180" step="any"></label></div></details>`;
-    container.append(row);
-    const query = row.querySelector('[data-query]');
-    const latitude = row.querySelector('[data-lat]');
-    const longitude = row.querySelector('[data-lng]');
-    const matches = row.querySelector('[data-search-results]');
-    const select = (place) => { query.value = place.name; latitude.value = place.place.lat; longitude.value = place.place.lng; matches.textContent = place.address || '위치 선택됨'; invalidate(); };
-    query.addEventListener('input', () => { latitude.value = ''; longitude.value = ''; matches.replaceChildren(); });
-    row.querySelector('[data-search]').addEventListener('click', async (event) => {
-      if (!query.value.trim()) return query.focus();
-      const button = event.currentTarget;
-      const searched = query.value;
-      button.disabled = true;
-      matches.textContent = '검색 중';
-      try {
-        const { places } = await requestMobility('search', { query: searched });
-        if (query.value !== searched || !row.isConnected) return;
-        matches.replaceChildren();
-        if (!places.length) matches.textContent = '검색 결과가 없어요.';
-        places.forEach((place) => {
-          const choice = document.createElement('button');
-          choice.type = 'button';
-          choice.textContent = `${place.name} · ${place.address}`;
-          choice.addEventListener('click', () => select(place));
-          matches.append(choice);
-        });
-      } catch (error) { if (query.value === searched) matches.textContent = error.message; }
-      finally { button.disabled = busy; }
-    });
-    row.querySelector('[data-remove]').addEventListener('click', () => {
-      if (container.children.length <= (type === 'participant' ? 2 : 1)) return;
-      row.remove(); invalidate(); limits();
-    });
-    if (seed) select(seed);
-    limits();
-  };
-  const readRows = (container) => [...container.children].map((row) => {
-    const latitude = row.querySelector('[data-lat]').value;
-    const longitude = row.querySelector('[data-lng]').value;
-    const name = (row.querySelector('[data-name]') || row.querySelector('[data-query]')).value.trim();
-    if (!name || !row.querySelector('[data-query]').value.trim() || latitude === '' || longitude === '') throw new Error('이름과 장소를 입력하고 검색 결과를 선택하거나 좌표를 입력해 주세요.');
-    return { name, place: { lat: Number(latitude), lng: Number(longitude) } };
-  });
-  const setBusy = (value) => { busy = value; form.querySelectorAll('input, select, button').forEach((control) => { control.disabled = value; }); limits(); form.setAttribute('aria-busy', String(value)); };
-  form.addEventListener('input', invalidate);
-  form.addEventListener('change', invalidate);
-  form.querySelectorAll('[data-add]').forEach((button) => button.addEventListener('click', () => { addRow(button.dataset.add); invalidate(); }));
-  form.querySelector('#midpoint-nearby').addEventListener('click', async () => {
-    try {
-      const origins = readRows(participants);
-      setBusy(true); invalidate(); status.textContent = '주변 후보를 찾고 있어요.';
-      const { places } = await requestMobility('nearby', { participants: origins, category: form.elements.category.value });
-      if (!places.length) throw new Error('주변 후보가 없어요. 다른 종류나 직접 입력한 장소를 선택해 주세요.');
-      candidates.replaceChildren(); places.forEach((place) => addRow('candidate', place));
-      status.textContent = `${places.length}곳을 찾았어요.`;
-    } catch (error) { status.textContent = error.message; }
-    finally { setBusy(false); }
-  });
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    if (busy) return;
-    try {
-      const body = { mode: form.elements.mode.value, participants: readRows(participants), candidates: readRows(candidates) };
-      invalidate(); setBusy(true); status.textContent = '이동 시간을 비교하고 있어요.';
-      const response = await requestMobility('midpoint', body);
-      compared = response.candidates;
-      status.textContent = `${response.estimated ? '추정 경로가 포함되어 있어요. 실제 시간과 다를 수 있어요. ' : ''}조회 ${new Date(response.comparedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;
-      results.innerHTML = compared.map((candidate, index) => `<article class="midpoint-result"><header><h2>${index + 1}. ${escapeHtml(candidate.name)}</h2><span class="tag ${candidate.estimated ? 'amber' : 'green'}">${candidate.estimated ? '추정 포함' : '경로 조회'}</span></header><dl><div><dt>평균</dt><dd>${candidate.averageMinutes}분</dd></div><div><dt>최대</dt><dd>${candidate.maximumMinutes}분</dd></div><div><dt>차이</dt><dd>${candidate.spreadMinutes}분</dd></div></dl><ul>${candidate.travels.map((travel) => `<li><span>${escapeHtml(travel.name)}</span><b>${travel.travelMinutes}분</b><small>${travel.method === 'estimate' ? '직선거리 추정' : escapeHtml(travel.detail)}${travel.walkingMinutes ? ` · 도보 ${travel.walkingMinutes}분` : ''}${travel.transferCount ? ` · 환승 ${travel.transferCount}회` : ''}</small></li>`).join('')}</ul><footer><a href="https://map.kakao.com/link/map/${encodeURIComponent(candidate.name)},${candidate.place.lat},${candidate.place.lng}" target="_blank" rel="noopener noreferrer"><span class="material-symbols-rounded">map</span>지도</a><button type="button" data-use="${index}"><span class="material-symbols-rounded">event_available</span>이 장소로 일정 만들기</button></footer></article>`).join('');
-    } catch (error) { status.textContent = error.message; }
-    finally { setBusy(false); }
-  });
-  results.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-use]');
-    const candidate = button && compared[Number(button.dataset.use)];
-    if (candidate) openEventFormModal('create', { title: '약속', location: candidate.name, place: { ...candidate.place, name: candidate.name } });
-  });
-  addRow('participant'); addRow('participant'); addRow('candidate');
-}
 
 function initializeKakaoMap() {
   const key = document.querySelector('meta[name="kakao-javascript-key"]')?.content.trim();
@@ -1069,6 +946,7 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   const family = window.MapDuleFamily;
   const familyJoined = Boolean(family?.isJoined());
   const selectedCalendar = isEditing ? calendarIdForEvent(existingEvent) : 'personal';
+  const showAdvanced = selectedCalendar !== 'personal' || Boolean(isEditing && (existingEvent.notes || existingEvent.description));
   const todayDate = localDateString(new Date());
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1098,19 +976,24 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
         <div class="event-form-field event-date-field"><label for="event-date-input"><span>날짜</span></label><input id="event-date-input" name="date" type="date" value="${escapeHtml(isEditing ? existingEvent.date : initialDate)}" required><span class="event-date-shortcuts"><button type="button" data-event-date="${todayDate}">오늘</button><button type="button" data-event-date="${tomorrowDate}">내일</button></span></div>
         <label class="event-all-day-field"><input name="allDay" type="checkbox" ${isEditing && existingEvent.allDay ? 'checked' : ''}><span class="event-checkmark"></span><span>종일</span></label>
         <div class="event-time-fields">
-          <div class="event-duration-presets" role="group" aria-label="일정 길이 빠른 설정"><span>일정 길이</span><button type="button" data-event-duration="30" aria-pressed="false">30분</button><button type="button" data-event-duration="60" aria-pressed="false">1시간</button><button type="button" data-event-duration="120" aria-pressed="false">2시간</button></div>
           <label class="event-form-field"><span>시작</span><input name="startTime" type="time" value="${escapeHtml(initialStartTime)}"></label>
           <span class="event-time-separator">—</span>
           <label class="event-form-field"><span>종료</span><input name="endTime" type="time" value="${escapeHtml(initialEndTime)}"></label>
         </div>
+        <div class="event-form-field event-location-field"><label for="event-location-input"><span>장소 <small>선택</small></span></label><div class="event-location-input-row"><input id="event-location-input" name="location" type="text" maxlength="120" placeholder="장소명이나 도로명 주소" value="${escapeHtml(existingEvent?.location || '')}"><button class="event-location-search" type="button" aria-label="장소 검색" title="지도에서 장소 검색"><span class="material-symbols-rounded">search</span></button></div><p class="event-location-status" aria-live="polite">${selectedPlace ? `선택한 위치 · ${escapeHtml(selectedPlace.name)}${selectedPlace.address ? ` · ${escapeHtml(selectedPlace.address)}` : ''}` : '장소는 선택사항입니다.'}</p><div class="event-place-results" hidden></div></div>
+        <details class="event-advanced" ${showAdvanced ? 'open' : ''}>
+          <summary>추가 설정 <small>캘린더 · 메모${familyJoined ? ' · 가족' : ''}</small></summary>
+          <div class="event-advanced-fields">
+        <div class="event-duration-presets" role="group" aria-label="일정 길이 빠른 설정"><span>일정 길이</span><button type="button" data-event-duration="30" aria-pressed="false">30분</button><button type="button" data-event-duration="60" aria-pressed="false">1시간</button><button type="button" data-event-duration="120" aria-pressed="false">2시간</button></div>
         <label class="event-form-field"><span>캘린더</span><select name="calendarId">${selectableCalendars.map((group) => `<option value="${group.id}" ${selectedCalendar === group.id ? 'selected' : ''}>${group.name}</option>`).join('')}</select></label>
         ${familyJoined ? `<fieldset class="event-participants-field" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>누가 가나요?</legend><div class="participant-options">${participantOptions}</div></fieldset>` : ''}
         ${familyJoined ? `<label class="event-form-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><span>출발 확인</span><select name="departNotice">${[[0, '사용 안 함'], [10, '10분 전까지 출발'], [20, '20분 전까지 출발'], [30, '30분 전까지 출발'], [45, '45분 전까지 출발'], [60, '1시간 전까지 출발'], [90, '1시간 30분 전까지 출발']].map(([value, label]) => `<option value="${value}" ${Number(isEditing ? existingEvent.departNotice || 0 : 30) === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
         <fieldset class="event-repeat-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><legend>매주 반복</legend><div class="repeat-days">${['일', '월', '화', '수', '목', '금', '토'].map((label, day) => `<label><input type="checkbox" name="repeatDays" value="${day}" ${isEditing && existingEvent.repeatDays?.includes(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><label class="repeat-until">반복 종료일<input name="repeatUntil" type="date" value="${escapeHtml(isEditing ? existingEvent.repeatUntil || '' : '')}"></label></fieldset>
         <label class="event-return-field event-family-option" ${selectedCalendar === 'family' ? '' : 'hidden'}><input type="checkbox" name="returnHome" ${(isEditing ? existingEvent.returnHome : true) ? 'checked' : ''}><span>끝나면 집으로 귀가 알림</span></label>
         ${isEditing && existingEvent.seriesId ? '<fieldset class="event-scope-field"><legend>수정 범위</legend><label><input type="radio" name="scope" value="one" checked>이 날만</label><label><input type="radio" name="scope" value="series">이 날부터 이후 모두</label></fieldset>' : ''}` : ''}
-        <div class="event-form-field event-location-field"><label for="event-location-input"><span>장소 <small>선택</small></span></label><div class="event-location-input-row"><input id="event-location-input" name="location" type="text" maxlength="120" placeholder="장소명이나 도로명 주소" value="${escapeHtml(existingEvent?.location || '')}"><button class="event-location-search" type="button" aria-label="장소 검색" title="지도에서 장소 검색"><span class="material-symbols-rounded">search</span></button></div><p class="event-location-status" aria-live="polite">${selectedPlace ? `선택한 위치 · ${escapeHtml(selectedPlace.name)}${selectedPlace.address ? ` · ${escapeHtml(selectedPlace.address)}` : ''}` : '검색 결과를 확인해 정확한 장소를 선택하세요.'}</p><div class="event-place-results" hidden></div></div>
         <label class="event-form-field"><span>설명</span><textarea name="notes" rows="3" maxlength="300" placeholder="메모를 남겨 보세요">${escapeHtml(isEditing ? existingEvent.notes || existingEvent.description || '' : '')}</textarea></label>
+          </div>
+        </details>
         <footer class="event-modal-footer">
           ${isEditing ? '<button class="event-delete-button" type="button"><span class="material-symbols-rounded">delete</span>삭제</button>' : '<span></span>'}
           <div><button class="event-cancel-button" type="button">취소</button><button class="event-save-button" type="submit">${isEditing ? '저장' : '등록'}</button></div>
@@ -1120,6 +1003,10 @@ function openEventFormModal(mode = 'create', existingEvent = null, initialDate =
   `;
   document.body.append(modal);
   const form = modal.querySelector('.event-modal-form');
+  form.addEventListener('invalid', (event) => {
+    const details = event.target.closest('details');
+    if (details) details.open = true;
+  }, true);
   const titleInput = form.elements.title;
   const timeFields = [...form.querySelectorAll('[name="startTime"], [name="endTime"]')];
   const locationInput = form.elements.location;
@@ -1659,12 +1546,6 @@ document.querySelector('.calendar-view-select')?.addEventListener('change', (eve
   renderCalendarView();
 });
 document.querySelector('.calendar-today-button')?.addEventListener('click', () => {
-  clearCalendarSearch();
-  const today = new Date();
-  displayedMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  setSelectedDate(today);
-});
-document.querySelector('.sidebar-today-button')?.addEventListener('click', () => {
   clearCalendarSearch();
   const today = new Date();
   displayedMonth = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -2258,9 +2139,9 @@ async function refreshAzureOpenAiStatus() {
     const response = await fetch('/api/ai/status');
     const status = await readAiResponse(response);
     if (!status.configured) {
-      badge.textContent = '서버 설정 필요';
+      badge.textContent = 'AI 사용 불가';
       badge.className = 'tag slate';
-      setAiAnalysisMessage('Azure OpenAI 서버 설정이 필요합니다. 로컬은 .env, 배포 사이트는 Azure Static Web Apps의 애플리케이션 설정에 endpoint, API key, deployment를 등록해 주세요.');
+      setAiAnalysisMessage('AI 일정 등록을 아직 사용할 수 없어요. 직접 입력으로 등록할 수 있습니다.');
       return;
     }
 
@@ -2285,7 +2166,7 @@ async function refreshAzureOpenAiStatus() {
       message?.append(' ', signOutLink);
     }
 
-    badge.textContent = 'Azure OpenAI 준비됨';
+    badge.textContent = 'AI 사용 가능';
     badge.className = 'tag mint';
   } catch (error) {
     badge.textContent = 'AI 서버 연결 안 됨';
@@ -2298,14 +2179,17 @@ async function refreshAzureOpenAiStatus() {
 refreshAzureOpenAiStatus();
 
 document.querySelector('#schedule-prompt')?.addEventListener('input', () => {
+  const hadAnalysis = analyzedScheduleEvents.length > 0 || document.querySelector('#analyze-prompt').disabled;
   aiPromptRevision += 1;
   analyzedScheduleEvents = [];
   const registerButton = document.querySelector('#ai .primary-cta');
   registerButton.disabled = true;
+  registerButton.hidden = true;
   registerButton.textContent = '다시 분석한 뒤 등록해 주세요';
   document.querySelector('.section-title small').textContent = '일정 분석 후 표시됩니다';
-  document.querySelector('.ai-stack').innerHTML = '<div class="empty-state panel"><span class="material-symbols-rounded">event_note</span><h2>일정을 다시 분석해 주세요</h2><p>수정한 문장으로 분석하면 새 미리보기가 표시됩니다.</p></div>';
-  setAiAnalysisMessage('문장을 수정했어요. 다시 분석한 뒤 등록해 주세요.');
+  document.querySelector('.ai-preview').hidden = true;
+  document.querySelector('.ai-stack').innerHTML = '';
+  setAiAnalysisMessage(hadAnalysis ? '문장을 수정했어요. 다시 분석한 뒤 등록해 주세요.' : '');
 });
 
 document.querySelector('#analyze-prompt')?.addEventListener('click', async (event) => {
@@ -2326,7 +2210,10 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
   analyzedScheduleEvents = [];
   const registerButton = document.querySelector('#ai .primary-cta');
   registerButton.disabled = true;
+  registerButton.hidden = true;
   registerButton.textContent = '분석된 일정이 없습니다';
+  document.querySelector('.ai-preview').hidden = false;
+  document.querySelector('.section-title small').textContent = '분석 중';
   document.querySelector('.ai-stack').innerHTML = '<div class="empty-state panel"><span class="material-symbols-rounded">hourglass_top</span><h2>일정을 분석하고 있어요</h2><p>잠시만 기다려 주세요.</p></div>';
 
   try {
@@ -2356,14 +2243,14 @@ document.querySelector('#analyze-prompt')?.addEventListener('click', async (even
     `;
     document.querySelector('.section-title small').textContent = `분석된 일정 ${result.events.length}개`;
     registerButton.disabled = false;
+    registerButton.hidden = false;
     registerButton.innerHTML = `<span class="material-symbols-rounded">calendar_add_on</span>분석된 일정 ${result.events.length}개 등록`;
     setAiAnalysisMessage('분석한 일정을 확인한 뒤 캘린더에 등록해 주세요.', 'success');
   } catch (error) {
     if (promptRevision !== aiPromptRevision) return;
     document.querySelector('.ai-stack').innerHTML = `
-      <div class="empty-state panel"><span class="material-symbols-rounded">error_outline</span><h2>일정을 분석하지 못했어요</h2><p>${escapeHtml(error.message || 'Azure OpenAI 연결 상태를 확인해 주세요.')}</p><button class="link-button" type="button" data-manual-fallback><span class="material-symbols-rounded">edit_calendar</span>직접 입력으로 등록</button></div>
+      <div class="empty-state panel"><span class="material-symbols-rounded">error_outline</span><h2>일정을 분석하지 못했어요</h2><p>${escapeHtml(error.message || 'Azure OpenAI 연결 상태를 확인해 주세요.')}</p></div>
     `;
-    document.querySelector('[data-manual-fallback]')?.addEventListener('click', () => openEventFormModal('create', null, localDateString(selectedDate)));
     document.querySelector('.section-title small').textContent = '분석 실패';
     setAiAnalysisMessage(error.message || '일정 분석에 실패했습니다.', 'error');
     if (error.code === 'AI_LOGIN_REQUIRED') {
@@ -2401,11 +2288,11 @@ document.querySelector('#ai .primary-cta')?.addEventListener('click', () => {
   if (!saveEvents([...savedEvents, ...newEvents])) return;
   analyzedScheduleEvents = [];
   document.querySelector('#ai .primary-cta').disabled = true;
+  document.querySelector('#ai .primary-cta').hidden = true;
   document.querySelector('#ai .primary-cta').textContent = '분석된 일정이 없습니다';
   document.querySelector('.section-title small').textContent = '일정 분석 후 표시됩니다';
-  document.querySelector('.ai-stack').innerHTML = `
-    <div class="empty-state panel"><span class="material-symbols-rounded">event_note</span><h2>분석된 일정이 없습니다</h2><p>일정 문장을 입력해 주세요. 분석 결과를 확인하고 캘린더에 등록할 수 있습니다.</p></div>
-  `;
+  document.querySelector('.ai-preview').hidden = true;
+  document.querySelector('.ai-stack').innerHTML = '';
   const firstDate = newEvents[0].date;
   const [year, month, day] = firstDate.split('-').map(Number);
   displayedMonth = new Date(year, month - 1, 1);
@@ -2414,7 +2301,7 @@ document.querySelector('#ai .primary-cta')?.addEventListener('click', () => {
   showToast(`${newEvents.length}개 일정을 캘린더에 등록했습니다.`, 'success');
 });
 
-document.querySelector('.manual-link')?.addEventListener('click', () => showView('today'));
+document.querySelector('.manual-link')?.addEventListener('click', () => openEventFormModal('create', null, localDateString(selectedDate)));
 
 function openLinkedView() {
   const id = location.hash.slice(1);

@@ -27,7 +27,7 @@ test('body limits count UTF-8 bytes and accept exactly 16KiB but not one byte mo
   assert.deepEqual(await readLimitedBody(request(`${text} `)), { text: '', tooLarge: true });
 });
 
-function handlerFor(fileName, route) {
+function handlersFor(fileName) {
   const registrations = new Map();
   const file = path.join(__dirname, '..', 'api', 'src', 'functions', fileName);
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
@@ -37,13 +37,21 @@ function handlerFor(fileName, route) {
     },
     Response, Buffer, console
   }, { filename: file });
-  return registrations.get(route).handler;
+  return registrations;
 }
+
+function handlerFor(fileName, route) {
+  return handlersFor(fileName).get(route).handler;
+}
+
+test('mobility registers only status and place search, not meeting recommendations', () => {
+  assert.deepEqual([...handlersFor('mobility.js').keys()].sort(), ['mobility-search', 'mobility-status']);
+});
 
 for (const [file, route, method] of [
   ['ai.js', 'ai-status', 'GET'], ['ai.js', 'ai-parse', 'POST'], ['ai.js', 'ai-plan', 'POST'],
   ['family.js', 'family', 'POST'], ['family.js', 'family', 'GET'],
-  ...['status', 'search', 'nearby', 'midpoint'].map((action) => ['mobility.js', `mobility-${action}`, action === 'status' ? 'GET' : 'POST']),
+  ...['status', 'search'].map((action) => ['mobility.js', `mobility-${action}`, action === 'status' ? 'GET' : 'POST']),
   ...['status', 'schedule', 'cancel', 'dispatch'].map((action) => ['departure-push.js', `push-${action}`, action === 'status' ? 'GET' : 'POST'])
 ]) {
   test(`${route} ${method} blocks cross-site and sibling-site browser requests before reading the body`, async () => {
@@ -77,7 +85,7 @@ test('same-origin and non-browser status requests still work without authenticat
   }
 });
 
-for (const [file, route] of [['ai.js', 'ai-parse'], ['family.js', 'family'], ['mobility.js', 'mobility-midpoint'], ['departure-push.js', 'push-schedule']]) {
+for (const [file, route] of [['ai.js', 'ai-parse'], ['family.js', 'family'], ['mobility.js', 'mobility-search'], ['departure-push.js', 'push-schedule']]) {
   test(`${route} stops reading oversized chunked bodies at the size limit`, async () => {
     let pulls = 0;
     let cancelled = false;

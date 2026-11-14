@@ -12,11 +12,17 @@ test('build output contains only browser assets', () => {
   assert.deepEqual(outputFiles, ['app-icon.svg', 'app.js', 'departure-push.js', 'family.css', 'family.js', 'index.html', 'manifest.webmanifest', 'staticwebapp.config.json', 'styles.css', 'sw.js']);
 });
 
-test('midpoint has an accessible entry and new styles preserve the font import', () => {
+test('meeting recommendations are removed while the secondary menu and font import remain', () => {
   const root = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-  assert.match(html, /data-view="midpoint" aria-label="약속 지점 찾기" title="약속 지점 찾기"/);
+  const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  assert.doesNotMatch(html, /midpoint|약속 지점|주변 카페/);
+  assert.doesNotMatch(app, /initializeMidpoint|requestMobility|midpoint/);
+  assert.doesNotMatch(styles, /midpoint|demo-result|people-times|\.orb\b/);
+  assert.equal(fs.existsSync(path.join(root, 'api', 'src', 'midpoint.js')), false);
+  assert.match(html, /aria-label="알림"/);
+  assert.match(html, /aria-label="데이터 관리"/);
   assert.match(styles, /^@import url\(/);
   const familyStyles = fs.readFileSync(path.join(root, 'family.css'), 'utf8');
   assert.match(html, /aria-controls="top-secondary-actions"/);
@@ -48,6 +54,40 @@ test('keeps the family refresh control accessible at narrow mobile widths', () =
 
   assert.match(html, /class="sync-button" type="button" aria-label="가족 새로고침" title="가족 새로고침"/);
   assert.match(styles, /@media\(max-width:360px\)\{\.date-heading \.sync-button\{[^}]*flex:0 0 44px/);
+});
+
+test('calendar controls are deduplicated and optional event fields are progressively disclosed', () => {
+  const root = path.resolve(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+  const familyStyles = fs.readFileSync(path.join(root, 'family.css'), 'utf8');
+  assert.doesNotMatch(html, /sidebar-today-button/);
+  assert.doesNotMatch(app, /sidebar-today-button/);
+  assert.match(html, /class="calendar-today-button"/);
+  assert.match(html, /class="nav-item ai-nav" data-view="ai"/);
+  assert.match(familyStyles, /\.app-shell \.top-actions \.ai-register-button\{display:none\}/);
+  assert.match(app, /<details class="event-advanced"/);
+  const optionalFields = app.slice(app.indexOf('<details class="event-advanced"'), app.indexOf('</details>', app.indexOf('<details class="event-advanced"')));
+  for (const name of ['calendarId', 'notes', 'repeatDays', 'departNotice', 'returnHome']) {
+    assert.ok(optionalFields.includes(`name="${name}"`), `Missing optional field: ${name}`);
+  }
+  assert.match(optionalFields, /class="participant-options">\$\{participantOptions\}/);
+  assert.match(styles, /\.event-advanced\{grid-column:1\/-1;min-width:0/);
+});
+
+test('AI entry keeps a single registration flow and separates optional saved-day calculations', () => {
+  const root = path.resolve(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const family = fs.readFileSync(path.join(root, 'family.js'), 'utf8');
+  assert.match(html, /class="ai-preview" aria-labelledby="ai-preview-title" hidden/);
+  assert.match(html, /class="manual-link" type="button" data-manual-fallback>직접 입력으로 등록/);
+  assert.equal((html.match(/data-manual-fallback/g) || []).length, 1);
+  assert.doesNotMatch(app, /<button[^>]+data-manual-fallback/);
+  assert.match(app, /<details class="ai-plan-tools">\s*<summary>저장된 일정의 이동 시간 계산/);
+  assert.match(app, /document\.querySelector\('\.manual-link'\)\?\.addEventListener\('click', \(\) => openEventFormModal\('create'/);
+  assert.match(family, /const moreOpen = section\.querySelector\('\.family-more-panel'\)\?\.open \?\? false;/);
 });
 
 test('closed mobile calendar menus stay out of keyboard and accessibility navigation', () => {

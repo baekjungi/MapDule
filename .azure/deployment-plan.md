@@ -4,6 +4,12 @@ Status: Validated
 
 ## 1. Scope and approval
 
+Current follow-up (2026-11-14): deploy the removal of meeting-place
+recommendations and the subsequent calendar, event editor, AI and family UI
+simplifications. Keep ordinary place search, route estimates, existing data,
+family sharing and notifications. Use the same main-branch CI/CD target and
+deployment identity. Do not change Azure resources, settings, roles or secrets.
+
 Current request (2026-11-14): deploy the fixes implemented in this conversation:
 reliable departure-push retries and serialized browser reservations; cross-date
 calendar search; removal of redundant editor and mock recommendations; accessible
@@ -52,6 +58,14 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 
 ## 4. Changes
 
+- Remove the meeting-place recommendation menu, view, styles, module and dedicated
+  nearby/midpoint endpoints; retain place search and route estimation.
+- Deduplicate calendar actions and progressively disclose optional event fields.
+- Simplify AI registration, preserve stale-result protection and manual fallback,
+  and separate optional saved-day calculations.
+- Prioritize family joining and collapse creation/management controls while
+  preserving their actions, values and refresh disclosure state.
+- Include regression tests and directly related documentation for these changes.
 - Fix event-form validation so corrected times and titles can be saved.
 - Permit place re-search after changing an in-flight query; ignore stale search results.
 - Preserve native keyboard activation on calendar event buttons.
@@ -70,6 +84,14 @@ Do not switch to azd, create an environment or generate replacement infrastructu
 ## 5. Validation
 
 ### 2026-11-14 update
+
+- [x] Current follow-up validation checks pass
+  - [x] JavaScript syntax, full regression suite and whitespace
+  - [x] Public asset build and API dependency loading
+  - [x] Node.js 22 API runtime, CI compatibility and unchanged package dependencies
+  - [x] Existing main alignment, push permission and deployment-secret presence
+  - [x] Unchanged deployment target, identities, resources, roles and settings
+  - [x] Current validation proof and browser evidence recorded
 
 - [x] Current JavaScript syntax, full regression suite and whitespace checks
 - [x] Public asset build and API dependency loading
@@ -95,11 +117,41 @@ mobile entry controls; focused regression tests and configuration documentation.
 ## 6. Deployment and verification
 
 Commit the verified application update, push normally to main and monitor the matching GitHub Actions run.
-Verify production assets and endpoints, then exercise actual unauthenticated AI inference and corrected form behavior.
+Verify exact production assets, retained status/search APIs, retired recommendation
+endpoints and the simplified desktop/mobile interface without changing production
+user data. Use mocked AI inference for UI validation rather than paid provider calls.
 Do not claim successful Azure OpenAI inference unless it has actually been exercised.
 Rollback, if needed, uses a normal revert commit after identifying the failed deployment; no destructive Git commands.
 
 ## 7. Validation Proof
+
+### 2026-11-14 recommendation removal and interface simplification
+
+Validation executed at 2026-11-14T10:29:43+09:00 through azure-validate.
+
+- `npm test`: 170 tests passed, zero failures.
+- `npm run check`, `npm run build` and `git diff --check`: passed.
+- API dependencies `@azure/functions` and `web-push` load successfully.
+  No dependency or runtime-major changes are included. Local Node.js is 24.15.0;
+  the existing managed API configuration and pre-deploy CI both use Node.js 22.
+  Package engine ranges include 22; the CI gate must pass on 22 before upload.
+- Local and remote main start from 17b346387f32b01e541ccdc9af7293c39699c79d.
+  GitHub push permission and the existing app-specific deployment-secret name
+  were verified without reading secret values.
+- Azure resource lookup confirms the existing Static Web App mapdule-baekjungi
+  in rg-mapdule-prod, East Asia. No resources are provisioned or reconfigured.
+  No new identities, RBAC assignments, application settings or secrets are changed;
+  provisioning and new-role propagation checks are not applicable.
+- Tests verify removed nearby/midpoint operations and Functions registrations,
+  retained place search/address fallback, API security/body limits and routing.
+- Local browser verification covered 320px/360px mobile and desktop layouts,
+  keyboard disclosure and validation, ordinary event persistence, optional-field
+  preservation, AI preview invalidation, successful registration/reset, manual
+  fallback and accessible family joining/creation without submitting family changes.
+- AI inference was mocked for browser checks; no new paid AI inference or physical
+  closed-app notification delivery is claimed. Production verification must avoid
+  creating or deleting user data and compare served assets to the release commit.
+- The historical patch and local handoff notes remain excluded from deployment.
 
 ### 2026-11-14 reliability, search and security update
 

@@ -3,7 +3,7 @@ const { readLimitedBody } = require('../request-body');
 const { handleMobilityRequest } = require('../mobility');
 const { browserRequestAllowed, CROSS_SITE_ERROR } = require('../request-security');
 
-for (const action of ['status', 'search', 'nearby', 'midpoint']) {
+for (const action of ['status', 'search']) {
   app.http(`mobility-${action}`, {
     methods: [action === 'status' ? 'GET' : 'POST'],
     authLevel: 'anonymous',

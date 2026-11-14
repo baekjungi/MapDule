@@ -88,6 +88,24 @@ test('rejects malformed percent-encoding without crashing the server', async () 
   }
 });
 
+test('removed meeting recommendation routes return JSON 404 without parsing their bodies', async (context) => {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  for (const action of ['nearby', 'midpoint']) {
+    for (const method of ['GET', 'POST']) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/mobility/${action}`, {
+        method, ...(method === 'POST' ? { headers: { 'Content-Type': 'text/plain' }, body: 'not JSON' } : {})
+      });
+      assert.equal(response.status, 404);
+      assert.equal(typeof (await response.json()).error, 'string');
+    }
+  }
+  const status = await fetch(`http://127.0.0.1:${port}/api/mobility/status`);
+  assert.equal(status.status, 200);
+  assert.equal(typeof (await status.json()).places, 'boolean');
+});
+
 test('serves the local family API with bounded request bodies and member authentication', async (context) => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => new Promise((resolve) => server.close(resolve)));
